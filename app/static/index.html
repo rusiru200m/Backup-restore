@@ -8,15 +8,34 @@
   <script src="/static/app.js" defer></script>
 </head>
 <body>
-<main class="layout">
+<div class="app-shell">
   <header class="masthead">
     <a class="brand" href="#" id="brandHome" aria-label="Backup Restore Fleet home"><span class="brand-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 4 16 4 16 0V5M4 12v7c0 4 16 4 16 0v-7"/></svg></span><span>Backup Restore <strong>Fleet</strong><small>Your servers. One restore workspace.</small></span></a>
+    <span class="topbar-context">WORKSPACE <span>/</span> <strong>Database operations</strong></span>
     <span class="local-badge"><span class="status-dot"></span> Local controller</span>
   </header>
+  <div class="shell-body">
+  <aside class="workspace-sidebar" aria-label="Workspace navigation and overview">
+   <div class="sidebar-inner">
+   <p class="sidebar-label">WORKSPACE</p>
   <nav class="workspace-nav" aria-label="Workspace">
-    <button id="navRestore" type="button" class="nav-button active" aria-current="page" aria-controls="restoreView">Restore database</button>
-    <button id="navServers" type="button" class="nav-button" aria-controls="serversView">Manage servers <span id="serverCount" class="count">0</span></button>
+    <button id="navRestore" type="button" class="nav-button active" aria-current="page" aria-controls="restoreView"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 11a8 8 0 1 1 2 6M4 4v7h7"/><path d="M12 7v5l3 2"/></svg><span>Restore database</span></button>
+    <button id="navServers" type="button" class="nav-button" aria-controls="serversView"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6h1m-1 11h1M12 6h5m-5 11h5"/></svg><span>Manage servers</span><span id="serverCount" class="count">0</span></button>
   </nav>
+  <div class="sidebar-overview">
+    <p class="sidebar-label">YOUR FLEET</p>
+    <div><span>Backup sources</span><strong id="sidebarStorageCount">&mdash;</strong></div>
+    <div><span>Destinations</span><strong id="sidebarDestinationCount">&mdash;</strong></div>
+    <span id="selectionState" class="selection-state">Connect to get started</span>
+  </div>
+  <div class="sidebar-guide">
+    <p class="sidebar-label">RESTORE IN THREE STEPS</p>
+    <ol><li id="sourceProgress"><span>1</span><div>Choose a backup<small>Pick a server and archive</small></div></li><li id="destinationProgress"><span>2</span><div>Select a destination<small>Choose your target database</small></div></li><li id="reviewProgress"><span>3</span><div>Review &amp; confirm<small>Check before replacing data</small></div></li></ol>
+  </div>
+  <div class="sidebar-footer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6l-8-3Z"/><path d="m8 12 3 3 5-6"/></svg><div><strong>Safety copy first</strong><p>A destination backup is saved before every restore.</p></div></div>
+  </div>
+  </aside>
+<main class="layout">
   <details id="connectionPanel" class="panel connection-panel" open>
     <summary><span class="connection-label"><span id="connectionDot" class="status-dot"></span><strong id="connectionTitle">Connect to your controller</strong><span id="connectionSummary" class="helper">Enter your app token to load saved servers.</span></span><span class="connection-action">Access settings</span></summary>
     <div class="connection-body">
@@ -38,7 +57,7 @@
     <details id="activityDetails"><summary>Activity details</summary><pre id="output">No operations have run yet.</pre></details>
   </section>
   <section id="restoreView" aria-labelledby="restoreViewTitle">
-    <div class="view-heading"><div><div class="overline">RESTORE WORKSPACE</div><h1 id="restoreViewTitle" tabindex="-1">Restore a database</h1><p>Choose your backup and destination, then review the restore.</p></div><button id="manageServersShortcut" type="button" class="secondary">Manage servers</button></div>
+    <div class="view-heading"><div><div class="overline"><span class="tiny-square"></span> RESTORE WORKSPACE</div><h1 id="restoreViewTitle" tabindex="-1">Restore a database<span class="heading-dot">.</span></h1><p>Your backup. Your destination. A fresh start for your data.</p></div><button id="manageServersShortcut" type="button" class="secondary">Manage servers <span aria-hidden="true">&nearr;</span></button></div>
     <div id="serverEmptyState" class="empty-state"><span class="empty-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 4 16 4 16 0V5M4 12v7c0 4 16 4 16 0v-7"/></svg></span><div><strong id="emptyStateTitle">Your servers are one connection away</strong><p id="emptyStateText">Connect above to use saved servers, or register a new server in Manage servers.</p></div><button id="addFirstServer" type="button" class="secondary">Add a server</button></div>
     <div class="restore-grid">
       <section id="sourceCard" class="panel restore-card" aria-labelledby="sourceCardTitle">
@@ -70,14 +89,14 @@
     </section>
   </section>
   <section id="serversView" aria-labelledby="serversViewTitle" hidden>
-    <div class="view-heading"><div><div class="overline">SERVER MANAGEMENT</div><h1 id="serversViewTitle" tabindex="-1">Server profiles</h1><p>Register your servers once. Choose them whenever you need to restore.</p></div><button id="backToRestore" type="button" class="secondary">&larr; Back to restore</button></div>
+    <div class="view-heading"><div><div class="overline"><span class="tiny-square"></span> SERVER MANAGEMENT</div><h1 id="serversViewTitle" tabindex="-1">Server profiles<span class="heading-dot">.</span></h1><p>Set up once. Keep every destination within reach.</p></div><button id="backToRestore" type="button" class="secondary">&larr; Back to restore</button></div>
     <div class="server-layout">
       <aside class="panel server-library" aria-label="Saved server profiles">
         <div class="sectiontitle"><h2>Your servers</h2></div>
         <p id="savedProfilesStatus" class="helper" role="status">Connect using your app token to load saved server profiles.</p>
         <label>Choose a saved profile<select id="profileEditor"><option value="">New server profile</option></select></label>
         <button id="newProfile" type="button" class="full-width">+ Add server profile</button>
-        <div class="library-note"><strong>One setup, ready next time</strong><p>Save a server's SSH access and folders here. The Restore database tab uses these saved profiles.</p><p>Use separate profiles for different databases on the same VPS.</p></div>
+        <div class="library-note"><strong>One setup, ready next time</strong><p>Save a server's SSH access and folders here. The Restore database workspace uses these saved profiles.</p><p>Use separate profiles for different databases on the same VPS.</p></div>
       </aside>
       <section class="panel server-editor" aria-labelledby="profileEditorTitle">
         <div class="editor-header"><h2 id="profileEditorTitle">New server profile</h2><p id="profileEditorSubtitle" class="helper">Enter connection details, set up SSH access, and choose this server's role.</p></div>
@@ -170,6 +189,8 @@
   </section>
   <footer>Backup Restore Fleet <span>&middot;</span> Verify your restored data before resuming application writes.</footer>
 </main>
+  </div>
+</div>
 <dialog id="folderDialog" class="panel folder-dialog" aria-labelledby="folderTitle">
   <div class="sectiontitle"><h2 id="folderTitle">Choose a VPS folder</h2></div>
   <p id="folderServer" class="helper"></p>

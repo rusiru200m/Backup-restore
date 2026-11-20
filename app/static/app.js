@@ -785,7 +785,16 @@ function updateWorkspace() {
   $("emptyStateText").textContent = profilesLoaded ? "Register your backup storage and destination in Manage servers, then return here." : "Connect above to use saved servers, or register a new server in Manage servers.";
   $("connectionTitle").textContent = profilesLoaded ? "Saved servers loaded" : "Connect to your controller";
   $("connectionSummary").textContent = profilesLoaded ? `${profiles.length} profile(s) available. Open to refresh or change your token.` : "Enter your app token to load saved servers.";
-  $("connectionDot").style.backgroundColor = profilesLoaded ? "#459d7c" : "";
+  $("connectionDot").style.backgroundColor = profilesLoaded ? "var(--accent)" : "";
+  $("sidebarStorageCount").textContent = profilesLoaded ? profiles.filter(profile => profile.backup_directory !== null).length : "—";
+  $("sidebarDestinationCount").textContent = profilesLoaded ? profiles.filter(profile => profile.destination !== null).length : "—";
+  $("selectionState").textContent = ready ? "Ready to review" : !profilesLoaded ? "Connect to get started" : "Select your restore target";
+  $("selectionState").classList.toggle("ready", ready);
+  $("sourceProgress").classList.toggle("complete", Boolean(source && $("backupName").value && backupsFor === source.id));
+  $("destinationProgress").classList.toggle("complete", Boolean(destination));
+  $("reviewProgress").classList.toggle("active", ready);
+  $("sourceCard").classList.toggle("has-selection", Boolean(source));
+  $("destinationCard").classList.toggle("has-selection", Boolean(destination));
 }
 function showWorkspace(view, focus = true) {
   if (running) return;
