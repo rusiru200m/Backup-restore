@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Backup Restore Starter</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+<main class="layout">
+  <header class="masthead">
+    <div class="overline">POSTGRESQL · DOCKER · SSH</div>
+    <h1>Backup Restore <span>Fleet</span></h1>
+    <p>Manage your VPS servers, choose where backups are stored, and restore to a selected PostgreSQL database.</p>
+    <div class="banner">Save servers → select backup storage → choose a dump → select and test a destination → pause writes and confirm. Each restore targets one database and first saves a safety backup.</div>
+  </header>
+  <section class="panel">
+    <div class="sectiontitle"><span class="step">01</span><h2>Admin access</h2></div>
+    <label>App token (from your local <code>.env</code>)<input id="token" type="password" placeholder="Paste APP_TOKEN" autocomplete="off" spellcheck="false"></label>
+    <button id="loadProfiles" class="secondary">Connect &amp; load saved servers</button>
+    <p class="helper">Profiles are saved on the controller. The token stays in this page's memory.</p>
+  </section>
+  <section class="panel">
+    <div class="sectiontitle"><span class="step">02</span><h2>Server profiles</h2></div>
+    <label>Edit a saved profile<select id="profileEditor"><option value="">New server profile</option></select></label>
+    <form id="profileForm">
+      <label>Profile name<input id="profileName" maxlength="120" placeholder="e.g. Production backups or Staging app DB" required></label>
+      <div class="inputgrid three">
+        <label>SSH host / IP<input id="profileHost" placeholder="vps.example.com" required></label>
+        <label>SSH port<input id="profilePort" value="22" type="number" min="1" max="65535" required></label>
+        <label>SSH username<input id="profileUser" value="root" required></label>
+      </div>
+      <label>SSH private key path on controller<input id="profileKey" placeholder="e.g. ~/.ssh/production_ed25519"></label>
+      <div class="inputgrid">
+        <label>Known hosts file (optional)<input id="profileKnownHosts" placeholder="Default: ~/.ssh/known_hosts"></label>
+        <label>Passphrase environment variable (optional)<input id="profilePassphraseEnv" placeholder="e.g. PRODUCTION_SSH_PASSPHRASE"></label>
+      </div>
+      <p class="helper">Enter file paths, never private key contents. A blank key path uses the source/destination defaults from .env. For encrypted keys, enter the name of an environment variable containing the passphrase. Verify each host's SSH fingerprint and add it to the controller's known_hosts before connecting.</p>
+      <label class="check"><input id="profileStorage" type="checkbox" checked> <span>This server stores backup archives</span></label>
+      <div id="storageFields"><label>Backup folder (absolute Linux path)<input id="profileBackupDir" placeholder="/srv/backups/postgresql/daily"></label></div>
+      <label class="check"><input id="profileTarget" type="checkbox"> <span>This server has a restore destination database</span></label>
+      <div id="targetFields" hidden>
+        <div class="inputgrid three">
+          <label>Docker container<input id="profileContainer" placeholder="postgres"></label>
+          <label>Existing database<input id="profileDatabase" placeholder="app_db"></label>
+          <label>PostgreSQL role<input id="profileDbUser" placeholder="app_user"></label>
+        </div>
+        <label>Safety backup folder on destination<input id="profileSafetyDir" value="/var/backups/backup-restore-starter"></label>
+      </div>
+      <p class="helper">A profile can have either role or both. Create additional named profiles for different folders or databases on the same VPS. PostgreSQL must already run inside Docker; database credentials stay configured inside that container.</p>
+      <div class="actionline">
+        <button id="saveProfile" type="submit">Save profile</button>
+        <button id="newProfile" type="button" class="secondary">New profile</button>
+        <button id="deleteProfile" type="button" class="danger" disabled>Delete profile</button>
+      </div>
+    </form>
+  </section>
+  <section class="panel">
+    <div class="sectiontitle"><span class="step">03</span><h2>Backup storage &amp; archive</h2></div>
+    <label>Backup storage server<select id="sourceProfile"><option value="">Load saved servers first</option></select></label>
+    <p id="sourceSummary" class="helper">Select a configured backup storage profile.</p>
+    <div class="actionline"><button id="loadBackups" class="secondary">Load backups</button><span class="helper">Newest 100 regular .dump files</span></div>
+    <label>Select a backup<select id="backupName"><option value="">Load backups first</option></select></label>
+  </section>
+  <section class="panel">
+    <div class="sectiontitle"><span class="step">04</span><h2>Restore destination</h2></div>
+    <label>Destination server / database<select id="destProfile"><option value="">Load saved servers first</option></select></label>
+    <p id="destSummary" class="helper">Select a configured destination profile.</p>
+    <div class="actionline"><button id="checkDestination" class="secondary">Test destination connection</button></div>
+  </section>
+  <section class="panel alert">
+    <div class="sectiontitle"><span class="step">05</span><h2>Confirm destructive restore</h2></div>
+    <p><strong>Replacing backed-up objects destroys their current records.</strong> The app exports a safety backup of the destination database before replacing objects. The database itself is not created or dropped.</p>
+    <p id="restoreSummary">Select a source archive and destination.</p>
+    <label class="check"><input type="checkbox" id="writesPaused"> <span>I have stopped applications and scheduled jobs that write to this database.</span></label>
+    <label class="check"><input type="checkbox" id="agreeReplace"> <span>I intend to replace existing objects and data with the selected backup.</span></label>
+    <label>Type the destination database name exactly<input id="confirmation" autocomplete="off" spellcheck="false"></label>
+    <div class="actionline"><button id="restore" class="danger">Create safety backup &amp; restore</button></div>
+    <p class="helper">Single-transaction restore with --clean --if-exists --no-owner --no-acl --exit-on-error. Extra objects absent from the archive may remain.</p>
+  </section>
+  <section class="panel status-panel" aria-live="polite">
+    <div class="sectiontitle"><span class="step">→</span><h2>Activity &amp; results</h2></div>
+    <div id="status" class="status neutral">Ready. Enter your token and load saved servers.</div>
+    <pre id="output">No operations have run yet.</pre>
+  </section>
+  <footer>Keep this controller local or access it through an SSH tunnel. Validate restores before resuming application writes.</footer>
+</main>
+</body>
+</html>
