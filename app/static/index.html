@@ -15,6 +15,14 @@
     <p>Manage your VPS servers, choose where backups are stored, and restore to a selected PostgreSQL database.</p>
     <div class="banner">Save servers → select backup storage → choose a dump → select and test a destination → pause writes and confirm. Each restore targets one database and first saves a safety backup.</div>
   </header>
+  <section id="errorSummary" class="panel error-summary" role="alert" aria-labelledby="errorTitle" tabindex="-1" hidden>
+    <h2 id="errorTitle">Operation failed</h2>
+    <p id="errorMessage"></p>
+    <p id="errorHint"></p>
+    <ul id="errorFields"></ul>
+    <p id="errorContext" class="helper"></p>
+    <p id="errorReference" class="helper"></p>
+  </section>
   <section class="panel">
     <div class="sectiontitle"><span class="step">01</span><h2>Admin access</h2></div>
     <label>App token (from your local <code>.env</code>)<input id="token" type="password" placeholder="Paste APP_TOKEN" autocomplete="off" spellcheck="false"></label>
@@ -25,7 +33,7 @@
     <div class="sectiontitle"><span class="step">02</span><h2>Server profiles</h2></div>
     <p id="savedProfilesStatus" class="banner" role="status">Saved servers have not been loaded. Enter your app token above and choose Connect &amp; load saved servers to reuse their details.</p>
     <label>Edit a saved profile<select id="profileEditor"><option value="">New server profile</option></select></label>
-    <form id="profileForm">
+    <form id="profileForm" novalidate>
       <label>Profile name<input id="profileName" maxlength="120" placeholder="e.g. Production backups or Staging app DB" required></label>
       <div class="inputgrid three">
         <label>SSH host / IP<input id="profileHost" placeholder="vps.example.com" required></label>
@@ -139,7 +147,7 @@
   </div>
   <nav id="folderBreadcrumbs" aria-label="Current server folder"></nav>
   <label for="folderFilter">Find in this folder</label><input id="folderFilter" type="search" placeholder="Filter folder and backup names">
-  <p id="folderMessage" class="helper" role="status" aria-live="polite"></p>
+  <p id="folderMessage" class="helper" role="status" aria-live="polite" tabindex="-1"></p>
   <ul id="folderList" aria-label="Server folders and backup files"></ul>
   <div class="actionline folder-actions">
     <button id="folderSelect" type="button">Select this folder</button>

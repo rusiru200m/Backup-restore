@@ -16,7 +16,9 @@ from .models import SSHServer
 
 
 class RemoteError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, command_completed: bool = False):
+        super().__init__(message)
+        self.command_completed = command_completed
 
 
 class SSHRemote:
@@ -53,7 +55,10 @@ class SSHRemote:
                 banner_timeout=15,
             )
         except Exception as exc:
-            client.close()
+            try:
+                client.close()
+            except Exception:
+                pass  # A cleanup error must not hide the original SSH failure.
             raise RemoteError(
                 f"Cannot SSH to {self.server.host}:{self.server.port} as {self.server.username}: "
                 f"{type(exc).__name__}: {exc}. Check port, firewall, host key and SSH key authorization."
@@ -61,10 +66,15 @@ class SSHRemote:
         self.client = client
         return self
 
-    def __exit__(self, *_):
+    def __exit__(self, exc_type, exc_value, traceback):
         if self.client:
-            self.client.close()
-            self.client = None
+            try:
+                self.client.close()
+            except Exception:
+                if exc_value is None:
+                    raise
+            finally:
+                self.client = None
 
     def sftp(self) -> paramiko.SFTPClient:
         if not self.client:
@@ -77,13 +87,14 @@ class SSHRemote:
             raise RemoteError("Not connected")
         cmd = shlex.join([str(a) for a in args])
         channel = self.client.get_transport().open_session()
-        channel.exec_command(cmd)
         start = time.monotonic()
         stdout = bytearray()
         stderr = bytearray()
         max_capture = 32_768
         truncated = False
+        operation_error = None
         try:
+            channel.exec_command(cmd)
             while True:
                 if channel.recv_ready():
                     data = channel.recv(65536)
@@ -101,14 +112,24 @@ class SSHRemote:
                     raise RemoteError(f"Remote command exceeded {timeout}s timeout: {args[0]}")
                 time.sleep(0.03)
             code = channel.recv_exit_status()
+            output = (stdout + stderr).decode("utf-8", errors="replace").strip()
+            if code != 0:
+                raise RemoteError(f"Remote command failed (exit {code}): {cmd}\n{output[-4000:]}")
+            if require_complete and truncated:
+                raise RemoteError("Remote discovery output exceeded the capture limit; refusing an incomplete result")
+            return output
+        except Exception as exc:
+            operation_error = exc
+            raise
         finally:
-            channel.close()
-        output = (stdout + stderr).decode("utf-8", errors="replace").strip()
-        if code != 0:
-            raise RemoteError(f"Remote command failed (exit {code}): {cmd}\n{output[-4000:]}")
-        if require_complete and truncated:
-            raise RemoteError("Remote discovery output exceeded the capture limit; refusing an incomplete result")
-        return output
+            try:
+                channel.close()
+            except Exception as exc:
+                if operation_error is None:
+                    raise RemoteError(
+                        "Remote command completed, but channel cleanup failed.",
+                        command_completed=True,
+                    ) from exc
 
 
 def docker_args(container: str, *command: str) -> list[str]:

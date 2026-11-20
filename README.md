@@ -179,6 +179,23 @@ All API routes require `X-Admin-Token`:
 
 Legacy `/api/backups`, `/api/preflight`, and `/api/restore` routes remain available for callers supplying full configuration directly.
 
+### Finding and fixing errors
+
+Failed actions show an error summary with the operation, the problem, and a suggested next step. Field errors appear beside their inputs; select a field in the summary to focus it. Correct the highlighted settings and repeat the action. The app validates server addresses, ports, paths, database names, server roles and restore confirmations before remote work begins, and repeats validation on the API.
+
+| Problem | What to check |
+|---|---|
+| Admin token rejected or not configured | Use the `APP_TOKEN` from the controller's `.env`. Configure a real token of at least 24 characters and restart the server after changing it. |
+| SSH connection refused, timed out, or hostname not found | Check the VPS address, separate SSH port, DNS, firewall and SSH service. |
+| SSH authentication failed | Check the SSH username, selected key and public-key authorization. During initial enrollment, verify the account password and whether password login is enabled. |
+| SSH identity missing or changed | Verify the fingerprint through a trusted VPS console. A changed identity requires investigation before updating trust. |
+| Key, folder or saved-profile storage unavailable | Check controller paths and permissions, or the selected VPS folder. Keep the complete managed-key directory and its encryption key together. |
+| Docker or PostgreSQL command failed | Check Docker access, the selected running container, PostgreSQL tools, database name, login role and database authentication. |
+
+API failures keep the existing `detail` field and also return an `error` object with a stable `code`, readable `message`, corrective `hint`, field errors and `request_id`. The response's `X-Request-ID` matches the reference shown in the page and the diagnostic entry in the controller's terminal. Use that reference when investigating an unexpected failure. Errors do not echo submitted tokens, passwords or private keys.
+
+Restore failures identify their stage and report the verified safety archive when one exists. A connection failure does not prove that a running restore stopped. Inspect the destination and the reported safety archive before retrying. If restore completed but cleanup failed, verify the database before deciding what to do next.
+
 Development checks:
 
 ```powershell

@@ -2,18 +2,27 @@
 from __future__ import annotations
 
 import re
+from ipaddress import ip_address
 from pathlib import PurePosixPath
-from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
+from pydantic import BaseModel, Field, SecretStr, StrictBool, field_validator, model_validator
 
 HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$")
+HOST_LABEL_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 USER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,63}$")
 NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
 FILE_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,200}\.dump$")
 
 
 def absolute_directory(value: str) -> str:
-    if not value.startswith("/") or "\x00" in value or ".." in PurePosixPath(value).parts or len(value) > 1024:
-        raise ValueError("Use an absolute Linux directory without .. (maximum 1024 characters)")
+    if (not value.startswith("/") or any(ord(character) < 32 or ord(character) == 127 for character in value)
+            or ".." in PurePosixPath(value).parts or len(value) > 1024):
+        raise ValueError("Use an absolute Linux directory without .. or control characters (maximum 1024 characters)")
+    return value
+
+
+def validated_backup_filename(value: str) -> str:
+    if not FILE_RE.fullmatch(value):
+        raise ValueError("Select a .dump filename using letters, numbers, dots, underscores or hyphens; do not enter a path")
     return value
 
 
@@ -35,15 +44,32 @@ class SSHServer(BaseModel):
     @field_validator("key_path", "known_hosts_path")
     @classmethod
     def validate_local_path(cls, value: str | None) -> str | None:
-        if value is not None and (not value.strip() or "\x00" in value):
-            raise ValueError("Enter a controller file path or leave it unset")
+        if value is not None and (not value.strip() or any(ord(character) < 32 or ord(character) == 127 for character in value)):
+            raise ValueError("Enter a controller file path without control characters, or leave it unset")
         return value
 
     @field_validator("host")
     @classmethod
     def validate_host(cls, value: str) -> str:
+        try:
+            ip_address(value)
+            if "%" not in value:
+                return value
+        except ValueError:
+            pass
         if not HOST_RE.fullmatch(value) or value.startswith("-"):
             raise ValueError("Use an IP address or hostname, without ssh:// or spaces")
+        if ":" in value or ("." in value and all(character.isdigit() or character == "." for character in value)):
+            raise ValueError("Enter a valid IPv4 or IPv6 address; enter the SSH port in its separate field")
+        if any(not HOST_LABEL_RE.fullmatch(label) for label in value.removesuffix(".").split(".")):
+            raise ValueError("Enter a valid hostname with labels of 1–63 letters, numbers or hyphens; labels cannot start or end with a hyphen")
+        return value
+
+    @field_validator("port", mode="before")
+    @classmethod
+    def validate_port(cls, value):
+        if isinstance(value, bool):
+            raise ValueError("Enter an SSH port number between 1 and 65535")
         return value
 
     @field_validator("username")
@@ -61,13 +87,7 @@ class SourceSelection(BaseModel):
     @field_validator("backup_directory")
     @classmethod
     def validate_directory(cls, value: str) -> str:
-        if not value.startswith("/") or "\x00" in value:
-            raise ValueError("Backup directory must be an absolute Linux path")
-        if ".." in PurePosixPath(value).parts:
-            raise ValueError("Backup directory must not contain ..")
-        if len(value) > 1024:
-            raise ValueError("Backup directory path too long")
-        return value
+        return absolute_directory(value)
 
 
 class CredentialCreate(BaseModel):
@@ -78,6 +98,8 @@ class CredentialCreate(BaseModel):
     def nonblank(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Enter a key name")
+        if any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError("Enter a key name without control characters")
         return value.strip()
 
 
@@ -157,6 +179,8 @@ class ServerProfile(BaseModel):
     def validate_label(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Enter a profile name")
+        if any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError("Enter a profile name without control characters")
         return value.strip()
 
     @field_validator("backup_directory")
@@ -172,34 +196,37 @@ class ServerProfile(BaseModel):
 
 
 class ProfileSourceRequest(BaseModel):
-    source_profile_id: str
+    source_profile_id: str = Field(min_length=1, max_length=128)
 
 
 class ProfileDestinationRequest(BaseModel):
-    destination_profile_id: str
+    destination_profile_id: str = Field(min_length=1, max_length=128)
 
 
 class ProfileRestoreRequest(ProfileSourceRequest, ProfileDestinationRequest):
-    source_profile_revision: str
-    destination_profile_revision: str
+    source_profile_revision: str = Field(min_length=1, max_length=128)
+    destination_profile_revision: str = Field(min_length=1, max_length=128)
     backup_filename: str
-    confirmation: str
-    writes_paused: bool = False
-    agree_replace: bool = False
-
-
-class RestoreRequest(SourceSelection, PreflightRequest):
-    backup_filename: str
-    confirmation: str
-    writes_paused: bool = False
-    agree_replace: bool = False
+    confirmation: str = Field(max_length=128)
+    writes_paused: StrictBool = False
+    agree_replace: StrictBool = False
 
     @field_validator("backup_filename")
     @classmethod
     def validate_filename(cls, value: str) -> str:
-        if not FILE_RE.fullmatch(value) or value in (".", ".."):
-            raise ValueError("Select one .dump file from the backup directory")
-        return value
+        return validated_backup_filename(value)
+
+
+class RestoreRequest(SourceSelection, PreflightRequest):
+    backup_filename: str
+    confirmation: str = Field(max_length=128)
+    writes_paused: StrictBool = False
+    agree_replace: StrictBool = False
+
+    @field_validator("backup_filename")
+    @classmethod
+    def validate_filename(cls, value: str) -> str:
+        return validated_backup_filename(value)
 
     @model_validator(mode="after")
     def explicit_confirmation(self) -> "RestoreRequest":

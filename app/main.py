@@ -4,6 +4,7 @@ from __future__ import annotations
 import hmac
 import os
 import threading
+import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -11,11 +12,12 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 import paramiko
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import PROJECT_ROOT
+from .errors import OperationError, error_response
 from .models import (PreflightRequest, RestoreRequest, SourceSelection, ServerProfile,
                      ProfileSourceRequest, ProfileDestinationRequest, ProfileRestoreRequest,
                      SSHServer, CredentialCreate, HostTrustRequest, KeyAuthorizeRequest, BrowseDirectoryRequest,
@@ -34,31 +36,42 @@ _restore_lock = threading.Lock()
 
 @app.middleware("http")
 async def private_api_responses(request, call_next):
-    response = await call_next(request)
-    if request.url.path.startswith("/api/"):
+    is_api = request.url.path == "/api" or request.url.path.startswith("/api/")
+    # A caller-controlled header must never supply the ID used in diagnostics.
+    request.state.request_id = uuid.uuid4().hex
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        if not is_api:
+            raise
+        response = error_response(request, exc)
+    if is_api:
         response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Request-ID"] = request.state.request_id
     return response
 
 
 @app.exception_handler(RequestValidationError)
 async def validation_error(request, exc):
-    # Never echo enrollment passwords, tokens or submitted secret material.
-    details = [{"loc": error["loc"], "msg": error["msg"], "type": error["type"]}
-               for error in exc.errors()]
-    return JSONResponse(status_code=422, content={"detail": details})
+    return error_response(request, exc)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_error(request, exc):
+    return error_response(request, exc)
 
 
 def require_token(x_admin_token: str | None = Header(default=None)) -> None:
     expected = os.environ.get("APP_TOKEN", "")
-    if len(expected) < 24 or expected.startswith("REPLACE_"):
+    if (len(expected) < 24 or expected.startswith("REPLACE_")
+            or not expected.isascii() or any(ord(char) < 33 or ord(char) > 126 for char in expected)):
         raise HTTPException(status_code=503, detail="Set a real APP_TOKEN (at least 24 characters) in .env")
-    if not x_admin_token or not hmac.compare_digest(x_admin_token, expected):
+    if not x_admin_token or not hmac.compare_digest(x_admin_token.encode("utf-8"), expected.encode("ascii")):
         raise HTTPException(status_code=401, detail="Invalid admin token")
 
 
 def fail_safely(exc: Exception) -> HTTPException:
-    # Exception text is returned only to token-authenticated local clients.
-    return HTTPException(status_code=400, detail=f"{type(exc).__name__}: {exc}")
+    return OperationError(exc)
 
 
 @app.get("/", include_in_schema=False)
@@ -70,7 +83,7 @@ def index():
 def backups(request: SourceSelection):
     try:
         return {"items": list_backups(request)}
-    except (RemoteError, WorkflowError, OSError, ValueError) as exc:
+    except (RemoteError, WorkflowError, OSError, ValueError, paramiko.SSHException) as exc:
         raise fail_safely(exc) from exc
 
 
@@ -78,7 +91,7 @@ def backups(request: SourceSelection):
 def check_destination(request: PreflightRequest):
     try:
         return preflight(request)
-    except (RemoteError, WorkflowError, OSError, ValueError) as exc:
+    except (RemoteError, WorkflowError, OSError, ValueError, paramiko.SSHException) as exc:
         raise fail_safely(exc) from exc
 
 
@@ -88,7 +101,7 @@ def run_restore(request: RestoreRequest):
         raise HTTPException(status_code=409, detail="Another restore is already in progress")
     try:
         return restore(request)
-    except (RemoteError, WorkflowError, OSError, ValueError) as exc:
+    except (RemoteError, WorkflowError, OSError, ValueError, paramiko.SSHException) as exc:
         raise fail_safely(exc) from exc
     finally:
         _restore_lock.release()
@@ -164,7 +177,7 @@ def profile_restore(request: ProfileRestoreRequest):
             **request.model_dump(exclude={"source_profile_id", "destination_profile_id", "source_profile_revision", "destination_profile_revision"}),
         )
     except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=exc.errors(include_context=False, include_input=False)) from exc
+        raise RequestValidationError(exc.errors(include_context=False, include_input=False)) from exc
     result = run_restore(resolved)
     return {**result, "source_profile_id": request.source_profile_id,
             "destination_profile_id": request.destination_profile_id}

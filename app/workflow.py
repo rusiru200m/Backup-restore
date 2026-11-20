@@ -15,12 +15,26 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .config import positive_integer_setting
 from .models import BrowseDirectoryRequest, PreflightRequest, RestoreRequest, SourceSelection, absolute_directory
 from .remote import RemoteError, SSHRemote, docker_args
 
 
 class WorkflowError(RuntimeError):
-    pass
+    """A safe workflow summary with context kept separately from its cause."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: str | None = None,
+        safety_backup_on_destination: str | None = None,
+        restore_completed: bool = False,
+    ):
+        super().__init__(message)
+        self.stage = stage
+        self.safety_backup_on_destination = safety_backup_on_destination
+        self.restore_completed = restore_completed
 
 
 def required_setting(name: str, default: str | None = None) -> str:
@@ -122,10 +136,15 @@ def restore(request: RestoreRequest) -> dict:
     All restore DDL/data changes are in one PostgreSQL transaction; external
     application writes must already be paused. The restore does NOT create a DB.
     """
-    max_bytes = int(required_setting("MAX_DUMP_MB", "2048")) * 1024 * 1024
-    destination_dir = request.safety_backup_directory or required_setting("DEST_SAFETY_BACKUP_DIR", "/var/backups/backup-restore-starter")
-    if not destination_dir.startswith("/") or ".." in destination_dir.split("/"):
-        raise WorkflowError("DEST_SAFETY_BACKUP_DIR must be a safe absolute path")
+    try:
+        max_bytes = positive_integer_setting("MAX_DUMP_MB", "2048") * 1024 * 1024
+    except ValueError as exc:
+        raise WorkflowError(str(exc), stage="configuration") from exc
+    destination_dir = request.safety_backup_directory or os.environ.get("DEST_SAFETY_BACKUP_DIR", "/var/backups/backup-restore-starter")
+    try:
+        absolute_directory(destination_dir)
+    except ValueError as exc:
+        raise WorkflowError("DEST_SAFETY_BACKUP_DIR must be a safe absolute Linux path", stage="configuration") from exc
     job_id = uuid.uuid4().hex[:12]
     archive_path = posixpath.join(request.backup_directory, request.backup_filename)
     staged_host = f"/tmp/backup-restore-stage-{job_id}.dump"
@@ -137,12 +156,13 @@ def restore(request: RestoreRequest) -> dict:
     source_bytes = 0
     safety_saved = False
     restore_succeeded = False
+    stage = "source_download"
     logs = []
 
     # The controller needs free space only for the source dump; not both backups.
-    with tempfile.TemporaryDirectory(prefix="backup-restore-starter-") as tmp:
-        local_archive = Path(tmp) / "source.dump"
-        try:
+    try:
+        with tempfile.TemporaryDirectory(prefix="backup-restore-starter-") as tmp:
+            local_archive = Path(tmp) / "source.dump"
             with connect_source(request.source) as source:
                 with source.sftp() as sftp:
                     attrs = sftp.lstat(archive_path)
@@ -166,8 +186,11 @@ def restore(request: RestoreRequest) -> dict:
                         raise WorkflowError(f"Incomplete download: expected {attrs.st_size} bytes, got {source_bytes}")
             logs.append(f"Downloaded {request.backup_filename} ({source_bytes:,} bytes) via source SFTP")
 
+            stage = "destination_connection"
             with connect_destination(request.destination) as dest:
+                stage = "destination_check"
                 sftp_dest = dest.sftp()
+                operation_error = None
                 try:
                     # Set permissions only when creating the selected folder. A user
                     # may browse to an existing shared folder; do not chmod it.
@@ -177,17 +200,21 @@ def restore(request: RestoreRequest) -> dict:
                     if current_db.strip() != request.database:
                         raise WorkflowError(f"Wrong target database: {current_db}")
 
+                    stage = "archive_upload"
                     sftp_dest.put(str(local_archive), staged_host)
                     sftp_dest.chmod(staged_host, 0o600)
                     dest.run(["docker", "cp", staged_host, f"{request.container}:{staged_container}"])
                     # pg_restore -l checks the archive TOC (not a full physical integrity test).
+                    stage = "archive_validation"
                     toc = dest.run(docker_args(request.container, "pg_restore", "-l", staged_container))
                     if "TOC Entries" not in toc and ";" not in toc:
                         raise WorkflowError("The uploaded file is not recognized as a PostgreSQL custom dump")
                     logs.append("Destination PostgreSQL tools recognized the dump format")
 
                     # Mandatory safety copy of current target database before replacement.
+                    stage = "safety_backup_creation"
                     dest.run(docker_args(request.container, "pg_dump", "-U", request.database_user, "-d", request.database, "-Fc", "-f", safety_container), timeout=1800)
+                    stage = "safety_backup_verification"
                     dest.run(docker_args(request.container, "pg_restore", "-l", safety_container), timeout=120)
                     dest.run(["docker", "cp", f"{request.container}:{safety_container}", safety_host], timeout=120)
                     dest.run(["chmod", "600", safety_host])
@@ -198,30 +225,60 @@ def restore(request: RestoreRequest) -> dict:
                     logs.append(f"Safety backup saved on destination: {safety_host} ({backup_stat.st_size:,} bytes)")
 
                     # Never pass --create. Replaces objects in the existing database.
-                    restore_output = dest.run(docker_args(
-                        request.container,
-                        "pg_restore", "-U", request.database_user, "-d", request.database,
-                        "--clean", "--if-exists", "--no-owner", "--no-acl",
-                        "--single-transaction", "--exit-on-error", staged_container,
-                    ), timeout=3600)
+                    stage = "restoring"
+                    try:
+                        restore_output = dest.run(docker_args(
+                            request.container,
+                            "pg_restore", "-U", request.database_user, "-d", request.database,
+                            "--clean", "--if-exists", "--no-owner", "--no-acl",
+                            "--single-transaction", "--exit-on-error", staged_container,
+                        ), timeout=3600)
+                    except RemoteError as exc:
+                        if exc.command_completed:
+                            restore_succeeded = True
+                            stage = "cleanup"
+                        raise
                     restore_succeeded = True
                     logs.append("pg_restore completed successfully in a single transaction")
                     if restore_output:
                         logs.append(restore_output[-1000:])
+                except Exception as exc:
+                    operation_error = exc
+                    raise
                 finally:
                     # Remove staging files even if validation or restore fails.
+                    # Preserve the original operation failure if cleanup also fails.
+                    cleanup_error = None
+                    if operation_error is None:
+                        stage = "cleanup"
                     for args in (
                         docker_args(request.container, "rm", "-f", staged_container, safety_container),
                         ["rm", "-f", staged_host],
                     ):
                         try:
                             dest.run(args, timeout=30)
-                        except Exception:
-                            pass
-                    sftp_dest.close()
-        except Exception as exc:
-            recovery = f" Safety backup (if created): {safety_host}" if safety_saved else " No verified safety backup was saved."
-            raise WorkflowError(f"Restore not completed. {type(exc).__name__}: {exc}.{recovery}") from exc
+                        except Exception as exc:
+                            if cleanup_error is None:
+                                cleanup_error = exc
+                    try:
+                        sftp_dest.close()
+                    except Exception as exc:
+                        if cleanup_error is None:
+                            cleanup_error = exc
+                    if operation_error is None and cleanup_error is not None:
+                        raise cleanup_error
+    except Exception as exc:
+        recovery = f" Verified safety backup saved on destination: {safety_host}." if safety_saved else " No verified safety backup was saved."
+        if restore_succeeded:
+            summary = "Restore completed successfully, but cleanup did not complete. Verify the destination database before attempting another restore."
+        else:
+            summary = f"Restore not completed. Failure during {stage.replace('_', ' ')}."
+        raise WorkflowError(
+            summary + recovery,
+            stage=stage,
+            safety_backup_on_destination=safety_host if safety_saved else None,
+            restore_completed=restore_succeeded,
+        ) from exc
     return {
         "ok": restore_succeeded,
         "job_id": job_id,
