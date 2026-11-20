@@ -7,6 +7,7 @@ let backupsFor = "";
 let credentials = [];
 let discoveredDatabases = [];
 let databaseDiscoveryFor = "";
+let scannedIdentity = null;
 const selected = id => profiles.find(p => p.id === $(id).value);
 const profileSelectionKey = "backupRestore.profileSelections";
 const profileSelectIds = ["profileEditor", "sourceProfile", "destProfile"];
@@ -44,7 +45,7 @@ const controlLabels = {
   token: "App token", profileName: "Profile name", profileHost: "SSH host", profilePort: "SSH port", profileUser: "SSH username",
   managedCredential: "SSH key", profileKey: "Private key path", profileKnownHosts: "Known hosts file", profilePassphraseEnv: "Passphrase environment variable",
   profileBackupDir: "Backup folder", profileContainer: "Docker container", profileDatabase: "Database", profileDbUser: "PostgreSQL role",
-  profileSafetyDir: "Safety backup folder", verifiedFingerprint: "Verified fingerprint", bootstrapPassword: "VPS SSH password",
+  profileSafetyDir: "Safety backup folder", verifiedFingerprint: "Server fingerprint", bootstrapPassword: "VPS SSH password",
   sourceProfile: "Backup storage server", destProfile: "Destination server", backupName: "Backup archive", confirmation: "Database name confirmation",
   writesPaused: "Pause database writes", agreeReplace: "Confirm data replacement", profileStorage: "Server roles", profileTarget: "Restore destination role",
 };
@@ -206,6 +207,7 @@ function busy(on) {
   running = on;
   document.querySelectorAll("input, select, button").forEach(el => { el.disabled = on; });
   if (!on) $("deleteProfile").disabled = !$("profileEditor").value;
+  identityControls();
 }
 async function request(url, data, method = "POST") {
   const token = $("token").value.trim();
@@ -256,7 +258,7 @@ function validResponse(url, method, result) {
   if (url === "/api/profiles" && method === "GET") return Array.isArray(result.items) && result.items.every(item => item && text(item.id) && text(item.revision) && text(item.name) && item.ssh && text(item.ssh.host) && text(item.ssh.username) && Number.isInteger(item.ssh.port) && (item.backup_directory === null || text(item.backup_directory)) && (item.destination === null || destination(item.destination)));
   if (url.startsWith("/api/profiles")) return method === "DELETE" ? result.ok === true : text(result.id);
   if (url === "/api/ssh/credentials") return method === "GET" ? Array.isArray(result.items) && result.items.every(credential) : credential(result);
-  if (url === "/api/ssh/scan" || url === "/api/ssh/trust") return text(result.host) && Number.isInteger(result.port) && text(result.fingerprint) && (url.endsWith("scan") ? text(result.key_type) : result.ok === true);
+  if (url === "/api/ssh/scan" || url === "/api/ssh/trust") return text(result.host) && Number.isInteger(result.port) && /^SHA256:[A-Za-z0-9+/]{43}$/.test(result.fingerprint || "") && (url.endsWith("scan") ? text(result.key_type) && typeof result.verified === "boolean" : result.ok === true);
   if (url === "/api/ssh/authorize" || url === "/api/ssh/test") return result.ok === true && text(result.message);
   if (url === "/api/ssh/directories") return text(result.path) && (result.parent === null || text(result.parent)) && Array.isArray(result.items) && result.items.every(item => item && text(item.name) && text(item.path) && typeof item.is_directory === "boolean");
   if (url === "/api/ssh/databases") return Array.isArray(result.items) && result.items.every(destination) && Number.isInteger(result.postgres_containers) && Array.isArray(result.warnings) && result.warnings.every(item => item && typeof item.container === "string" && typeof item.message === "string");
@@ -327,10 +329,37 @@ function credentialFields() {
   $("publicKeyDetails").hidden = !credential;
   $("managedPublicKey").textContent = credential?.public_key || "";
 }
-function resetEnrollment() {
+function currentScannedIdentity() {
+  const server = sshSettings();
+  return scannedIdentity && scannedIdentity.host === server.host && scannedIdentity.port === server.port ? scannedIdentity : null;
+}
+function identityControls() {
+  const trusted = currentScannedIdentity()?.verified === true;
+  $("trustHost").disabled = running || trusted;
+}
+function resetScannedIdentity() {
+  scannedIdentity = null;
   $("verifiedFingerprint").value = "";
+  $("hostFingerprint").textContent = "Enter the VPS host and port above, then choose Trust this server. Saved server identities are checked automatically on every connection.";
+  identityControls();
+}
+function resetEnrollment() {
+  resetScannedIdentity();
   $("bootstrapPassword").value = "";
-  $("hostFingerprint").textContent = "Read and verify the SSH fingerprint for this host and port before authorizing a key.";
+}
+async function readServerIdentity() {
+  const server = sshSettings();
+  resetScannedIdentity();
+  const result = await request("/api/ssh/scan", server);
+  if (result.host !== server.host || result.port !== server.port || sshSettings().host !== server.host || sshSettings().port !== server.port) {
+    throw new OperationError("The server details changed while reading its fingerprint.", { code: "SERVER_IDENTITY_CHANGED", hint: "Choose Trust this server or Read server fingerprint again for the current host and port.", fields: [invalid("fingerprint", "Read the fingerprint again for the selected host and port.")] });
+  }
+  const identity = { host: server.host, port: server.port, fingerprint: result.fingerprint, verified: result.verified };
+  scannedIdentity = identity;
+  $("verifiedFingerprint").value = result.fingerprint;
+  $("hostFingerprint").textContent = `${result.host}:${result.port} · ${result.key_type} · ${result.verified ? "Matches the saved server identity. This server is already trusted." : "New server identity. Choose Trust this server to save it. Optional fingerprint comparison is available below."}`;
+  identityControls();
+  return { server, identity, result };
 }
 async function refreshCredentials(desired = $("managedCredential").value) {
   credentials = (await request("/api/ssh/credentials", undefined, "GET")).items;
@@ -465,27 +494,41 @@ $("restore").addEventListener("click", () => perform(async () => {
 roleFields();
 
 $("managedCredential").addEventListener("change", () => { credentialFields(); $("bootstrapPassword").value = ""; });
-["profileHost", "profilePort", "profileUser"].forEach(id => $(id).addEventListener("input", resetEnrollment));
+["profileHost", "profilePort"].forEach(id => $(id).addEventListener("input", resetEnrollment));
+$("profileUser").addEventListener("input", () => { $("bootstrapPassword").value = ""; });
 $("generateKey").addEventListener("click", () => perform(async () => {
   const name = $("profileName").value.trim() || $("profileHost").value.trim();
   const result = await request("/api/ssh/credentials", { name });
   await refreshCredentials(result.id);
-  setStatus("SSH key generated and selected", "success", "Next: verify the VPS fingerprint, authorize this public key, test SSH access, and save the profile. The private key stays encrypted on the controller.");
+  setStatus("SSH key generated and selected", "success", "Next: trust the server once, authorize this public key, test SSH access, and save the profile. The private key stays encrypted on the controller.");
 }, "Generating and encrypting an SSH key...", () => {
   const name = $("profileName").value.trim() || $("profileHost").value.trim();
   return name && name.length <= 120 && !hasControlCharacters(name) ? [] : [invalid("name", "Enter a profile/key name of 1–120 characters without control characters before generating a key. Host details are optional for this step.")];
 }));
 $("scanHost").addEventListener("click", () => perform(async () => {
-  const result = await request("/api/ssh/scan", sshSettings());
-  $("hostFingerprint").textContent = `${result.host}:${result.port} · ${result.key_type} · ${result.fingerprint} (not yet verified)`;
-  $("verifiedFingerprint").value = "";
-  setStatus("Server fingerprint read. Verify it before trusting.", "neutral", JSON.stringify(result, null, 2));
+  const { result } = await readServerIdentity();
+  setStatus(result.verified ? "Server already trusted; saved identity matches" : "Server fingerprint read. Choose Trust this server when ready.", result.verified ? "success" : "neutral", JSON.stringify(result, null, 2));
 }, "Reading the server SSH identity without sending credentials...", sshIssues, sshContext));
 $("trustHost").addEventListener("click", () => perform(async () => {
-  const result = await request("/api/ssh/trust", { server: sshSettings(), fingerprint: $("verifiedFingerprint").value.trim() });
-  $("hostFingerprint").textContent = `Verified and saved: ${result.host}:${result.port} · ${result.fingerprint}`;
-  setStatus("Verified server identity saved", "success", "The app will check this identity on every managed-key SSH connection. You can now authorize the generated public key.");
-}, "Checking and saving the verified server identity...", () => [...sshIssues(), ...(/^SHA256:[A-Za-z0-9+/]{43}$/.test($("verifiedFingerprint").value.trim()) ? [] : [invalid("fingerprint", "Paste the complete SHA256 fingerprint verified through your VPS console or another trusted SSH connection.")])], sshContext));
+  let identity = currentScannedIdentity();
+  let server = sshSettings();
+  // Preserve an optional fingerprint comparison; the API checks it against a
+  // fresh handshake before saving. Otherwise read it as part of this action.
+  if (!identity) ({ server, identity } = await readServerIdentity());
+  if (identity.verified) {
+    setStatus("Server already trusted; saved identity matches", "success", "The saved server identity is checked automatically. You can continue using SSH access without trusting it again.");
+    return;
+  }
+  const result = await request("/api/ssh/trust", { server, fingerprint: identity.fingerprint });
+  if (result.host !== identity.host || result.port !== identity.port || result.fingerprint !== identity.fingerprint || currentScannedIdentity() !== identity) {
+    resetScannedIdentity();
+    throw new OperationError("The saved identity response did not match the selected server fingerprint.", { code: "SERVER_IDENTITY_CHANGED", hint: "Check the host and port, then choose Trust this server again. Use optional fingerprint verification if the server identity is uncertain.", fields: [invalid("fingerprint", "Read the current server identity again.")] });
+  }
+  identity.verified = true;
+  $("hostFingerprint").textContent = `Trusted and saved: ${result.host}:${result.port} · ${result.fingerprint}`;
+  identityControls();
+  setStatus("Server trusted and identity saved", "success", "The first received identity was saved without independent verification. Later identity changes are blocked. You can now authorize the generated public key.");
+}, "Reading and saving the server identity...", sshIssues, sshContext));
 $("authorizeKey").addEventListener("click", () => {
   const password = $("bootstrapPassword").value;
   $("bootstrapPassword").value = "";

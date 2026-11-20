@@ -49,12 +49,19 @@
           <pre id="managedPublicKey"></pre>
           <p class="helper">If SSH password login is disabled, add this public key as a new line in the selected account's ~/.ssh/authorized_keys through your VPS console or existing SSH client. Keep existing keys. The app's private key is never displayed.</p>
         </details>
-        <h3>1. Verify the server identity</h3>
-        <button id="scanHost" type="button" class="secondary">Read server fingerprint</button>
-        <p id="hostFingerprint" class="helper">Enter the VPS host and port above, then read its SSH fingerprint. Reading alone does not establish trust.</p>
-        <label>Verified SHA256 fingerprint<input id="verifiedFingerprint" placeholder="SHA256:..." autocomplete="off" spellcheck="false"></label>
-        <p class="helper">Compare the fingerprint with your VPS provider console or an existing trusted SSH connection. Paste the verified value here; the app will check it again and save the server identity automatically.</p>
-        <button id="trustHost" type="button" class="secondary">Verify &amp; trust server</button>
+        <h3>1. Trust the server once</h3>
+        <button id="trustHost" type="button" aria-describedby="hostTrustHelp">Trust this server</button>
+        <p id="hostTrustHelp" class="helper">Trust on first connection: saves the first identity received; it is not independently verified. Later identity changes are blocked.</p>
+        <p id="hostFingerprint" class="helper" role="status" aria-live="polite">Enter the VPS host and port above, then choose Trust this server. Saved server identities are checked automatically on every connection.</p>
+        <details id="hostIdentityDetails">
+          <summary>Server fingerprint (optional verification)</summary>
+          <button id="scanHost" type="button" class="secondary">Read server fingerprint</button>
+          <label>Server fingerprint (read automatically)<input id="verifiedFingerprint" placeholder="Choose Read server fingerprint above" readonly autocomplete="off" spellcheck="false" aria-describedby="hostIdentityHelp"></label>
+          <p id="hostIdentityHelp" class="helper">For extra assurance before choosing Trust this server, compare this fingerprint with your VPS console or an existing trusted SSH session. It identifies the server and is different from the generated SSH key fingerprint shown in the key selector.</p>
+          <p class="helper">In your VPS provider console or an existing trusted SSH session, run this read-only command to display the server's public host key fingerprints. Compare the complete SHA256 value for the key type shown after reading.</p>
+          <pre>for key in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$key" -E sha256; done</pre>
+          <p class="helper">Reading the fingerprint in this app does not verify it by itself. If the values differ, stop and check the host, port, and server identity.</p>
+        </details>
         <h3>2. Authorize the generated key</h3>
         <label>Current VPS SSH password (used once)<input id="bootstrapPassword" type="password" autocomplete="off" placeholder="Current password for the SSH username above"></label>
         <p class="helper">The password is used only to add the public key to this VPS account. It is not saved. This requires SSH password login; otherwise use the public-key console setup above.</p>

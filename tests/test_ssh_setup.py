@@ -93,12 +93,58 @@ def test_host_requires_matching_verified_identity_and_rejects_rotation(api, monk
         assert response.status_code == 200, response.text
     hosts = paramiko.HostKeys(ssh_setup.known_hosts_path())
     assert hosts.check("[example.com]:2222", key)
+    saved_hosts = Path(ssh_setup.known_hosts_path()).read_bytes()
+    for _ in range(2):
+        scan = api.post("/api/ssh/scan", json=server)
+        assert scan.status_code == 200, scan.text
+        assert scan.json()["verified"] is True
+        assert scan.json()["fingerprint"] == public["fingerprint"]
+        assert Path(ssh_setup.known_hosts_path()).read_bytes() == saved_hosts
     changed = ssh_setup.load_private_key(generated(api)["id"])
     monkeypatch.setattr(ssh_setup, "scan_key", lambda _: changed)
+    scan = api.post("/api/ssh/scan", json=server)
+    assert scan.status_code == 400
+    assert scan.json()["error"]["code"] == "SSH_HOST_KEY_MISMATCH"
+    assert Path(ssh_setup.known_hosts_path()).read_bytes() == saved_hosts
     response = api.post("/api/ssh/trust", json={"server": server, "fingerprint": ssh_setup.fingerprint(changed)})
     assert response.status_code == 400
     assert hosts.check("[example.com]:2222", key)
     assert paramiko.HostKeys(ssh_setup.known_hosts_path()).check("[example.com]:2222", key)
+
+
+@pytest.mark.parametrize("trusted_port", [22, 2222])
+def test_scan_trust_is_specific_to_host_and_port(api, monkeypatch, trusted_port):
+    public = generated(api)
+    key = ssh_setup.load_private_key(public["id"])
+    monkeypatch.setattr(ssh_setup, "scan_key", lambda _: key)
+    trusted = SSHServer(host="example.com", port=trusted_port)
+    ssh_setup.trust_host(trusted, public["fingerprint"])
+    path = Path(ssh_setup.known_hosts_path())
+    saved_hosts = path.read_bytes()
+    for server in (
+        SSHServer(host="other.example.com", port=trusted_port),
+        SSHServer(host="example.com", port=2222 if trusted_port == 22 else 22),
+    ):
+        assert ssh_setup.scan_host(server)["verified"] is False
+        assert path.read_bytes() == saved_hosts
+    assert ssh_setup.scan_host(trusted)["verified"] is True
+
+
+def test_scan_different_key_type_does_not_replace_trusted_identity(api, monkeypatch):
+    public = generated(api)
+    original = ssh_setup.load_private_key(public["id"])
+    monkeypatch.setattr(ssh_setup, "scan_key", lambda _: original)
+    server = SSHServer(host="example.com")
+    ssh_setup.trust_host(server, public["fingerprint"])
+    path = Path(ssh_setup.known_hosts_path())
+    saved_hosts = path.read_bytes()
+    changed = paramiko.RSAKey.generate(2048)
+    monkeypatch.setattr(ssh_setup, "scan_key", lambda _: changed)
+    with pytest.raises(ValueError, match="already has a different trusted identity"):
+        ssh_setup.scan_host(server)
+    assert path.read_bytes() == saved_hosts
+    assert paramiko.HostKeys(str(path)).check("example.com", original)
+    assert not paramiko.HostKeys(str(path)).check("example.com", changed)
 
 
 @pytest.mark.parametrize("method,path", [

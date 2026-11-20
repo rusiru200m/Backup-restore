@@ -144,8 +144,17 @@ def scan_key(server: SSHServer) -> paramiko.PKey:
 
 def scan_host(server: SSHServer) -> dict:
     key = scan_key(server)
+    verified = False
+    with _lock:
+        path = Path(known_hosts_path())
+        if path.exists():
+            hosts = paramiko.HostKeys(str(path))
+            if hosts.lookup(host_entry(server)):
+                if not hosts.check(host_entry(server), key):
+                    raise ValueError("This server already has a different trusted identity. Investigate the change before updating known_hosts.")
+                verified = True
     return {"host": server.host, "port": server.port, "key_type": key.get_name(),
-            "fingerprint": fingerprint(key), "verified": False}
+            "fingerprint": fingerprint(key), "verified": verified}
 
 
 def host_entry(server: SSHServer) -> str:

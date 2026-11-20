@@ -120,7 +120,7 @@ def _application_error(exc: BaseException) -> Diagnostic | None:
         (("ssh key not found", "managed ssh key not found"), "SSH_KEY_NOT_FOUND", "The selected SSH key was not found.",
          "Load and select an existing managed key, or check the advanced key path on this controller."),
         (("known hosts file missing", "verify and trust the server fingerprint", "not found in known_hosts"), "SSH_HOST_NOT_TRUSTED", "The server identity has not been trusted.",
-         "Scan the server fingerprint, verify it using the VPS console, then trust it before connecting."),
+         "For a generated key, click Trust this server once before connecting. For an existing key, add the server to its selected known_hosts file through a trusted SSH connection."),
         (("fingerprint does not match", "different trusted identity"), "SSH_HOST_KEY_MISMATCH", "The server identity does not match the trusted fingerprint.",
          "Verify the SSH host fingerprint in the VPS console and investigate the change before updating trusted hosts."),
         (("cannot unlock managed", "managed ssh encryption key is missing"), "SSH_KEY_STORAGE_ERROR", "The managed SSH key cannot be unlocked.",

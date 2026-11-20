@@ -67,13 +67,25 @@ You can generate SSH credentials and install public keys from this dashboard wit
 
 1. Enter the profile name, VPS host/IP, SSH port, and username.
 2. Click **Generate SSH key**. The app creates an Ed25519 key, encrypts its private half on the controller, and selects it. Existing generated keys are available in the key dropdown.
-3. Click **Read server fingerprint**. Compare the displayed SHA256 fingerprint with the identity shown in your provider's VPS console or existing trusted SSH client. Paste the verified fingerprint and click **Verify & trust server**. The app checks a fresh handshake and maintains its own known_hosts file. A scan alone never trusts a host, and an existing different identity is rejected.
-4. Enter the account's **current VPS SSH password** and click **Install public key using password**. The app uses that password once over host-verified SSH to append the public key to that account's `~/.ssh/authorized_keys`, preserving existing entries. It never saves this password. Repeat installation of the exact same public key is idempotent.
+3. Click **Trust this server** once. The app reads its SSH identity and saves it automatically without requiring a fingerprint comparison or console command. It checks the identity again before saving and refuses unexpected changes to an already saved identity. A matching saved server needs no new trust setup on later runs.
+4. Enter the account's **current VPS SSH password** and click **Install public key using password**. The app uses that password once over SSH checked against the saved server identity to append the public key to that account's `~/.ssh/authorized_keys`, preserving existing entries. It never saves this password. Repeat installation of the exact same public key is idempotent.
 5. Click **Test SSH key access**, configure the storage/destination details, and **Save profile**. Future operations use the generated key and saved server identity automatically.
+
+The app uses **trust on first connection**: the identity received on that first connection is accepted, rather than independently proving it belongs to the intended VPS. Every later connection must match the saved identity; changed identities are blocked and are never silently replaced. This follows the first-use trust approach supported by [OpenSSH](https://man.openbsd.org/ssh_config#StrictHostKeyChecking). No identity is saved merely by opening a profile or running a read-only scan; use **Trust this server** to accept it.
+
+The **server fingerprint** identifies the VPS, whereas the fingerprint in the **SSH key** dropdown identifies your generated login key. They are different keys. For optional independent verification, expand the server fingerprint details, click **Read server fingerprint**, then compare the value through your VPS provider's console or an already trusted SSH session. On that console, list public host-key fingerprints with:
+
+```bash
+for key in /etc/ssh/ssh_host_*_key.pub; do
+  ssh-keygen -lf "$key" -E sha256
+done
+```
+
+Match the displayed SHA256 value and key type with one of these entries, then click **Trust this server**. This comparison is optional. The command only reads public host keys; if the SSH service uses custom host-key locations, use those public-key files instead.
 
 For backup and safety-backup folder fields, click **Browse VPS folders** after SSH setup. The picker browses the VPS entered in the current profile, including unsaved profiles. Open folders with a click, use **Server root /**, **Home folder**, **Up one level**, or the folder breadcrumbs to navigate, then click **Select this folder**. The selected remote path fills the field; click **Save profile** to keep it. `.dump` files are shown as a preview; archive selection still happens under **Backup storage & archive**. Browsing only reads directory metadata and does not upload files or modify the VPS. The account needs permission to read each opened folder. Symbolic links are omitted; a maximum of 500 sorted folders/archive entries is shown with a notice if more exist. A new safety folder can still be entered manually and will be created during the restore workflow.
 
-If SSH password login is disabled, open **Public key for VPS console setup** and append the displayed public key through your existing VPS console/SSH session. Then return to test access and save the profile. The app does not enable password login or change SSH daemon configuration. It cannot obtain initial access without an existing authorized login or console access. A host address, username, port and independently verified server identity are still required.
+If SSH password login is disabled, open **Public key for VPS console setup** and append the displayed public key through your existing VPS console/SSH session. Then return to test access and save the profile. The app does not enable password login or change SSH daemon configuration. It cannot obtain initial access without an existing authorized login or console access. A host address, username, port and saved server identity are still required.
 
 ### Discover destination databases
 
@@ -171,7 +183,7 @@ All API routes require `X-Admin-Token`:
 | `GET /api/ssh/credentials` | List public metadata of generated keys |
 | `POST /api/ssh/credentials` | Generate and encrypt an Ed25519 key using a supplied name |
 | `POST /api/ssh/scan` | Read the SSH server fingerprint without sending credentials |
-| `POST /api/ssh/trust` | Check the independently verified fingerprint and save the server identity |
+| `POST /api/ssh/trust` | Recheck a read fingerprint and save a new server identity; reject changed saved identities |
 | `POST /api/ssh/authorize` | Install the selected public key using the current account password once |
 | `POST /api/ssh/test` | Test key authentication and SFTP with current form settings |
 | `POST /api/ssh/directories` | Browse a remote directory using current SSH settings; returns folders and .dump filename previews |
