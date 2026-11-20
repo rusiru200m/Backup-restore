@@ -10,19 +10,42 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
+import paramiko
 
+from .config import PROJECT_ROOT
 from .models import (PreflightRequest, RestoreRequest, SourceSelection, ServerProfile,
-                     ProfileSourceRequest, ProfileDestinationRequest, ProfileRestoreRequest)
-from . import profiles
+                     ProfileSourceRequest, ProfileDestinationRequest, ProfileRestoreRequest,
+                     SSHServer, CredentialCreate, HostTrustRequest, KeyAuthorizeRequest, BrowseDirectoryRequest,
+                     DiscoverDatabasesRequest)
+from .discovery import discover_databases
+from . import profiles, ssh_setup
 from .remote import RemoteError
-from .workflow import WorkflowError, list_backups, preflight, restore
+from .workflow import WorkflowError, list_backups, preflight, restore, connect_source, browse_directory
 
-load_dotenv()
+load_dotenv(PROJECT_ROOT / ".env", override=False)
 BASE_DIR = Path(__file__).resolve().parent
 app = FastAPI(title="Backup Restore Starter", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 _restore_lock = threading.Lock()
+
+
+@app.middleware("http")
+async def private_api_responses(request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request, exc):
+    # Never echo enrollment passwords, tokens or submitted secret material.
+    details = [{"loc": error["loc"], "msg": error["msg"], "type": error["type"]}
+               for error in exc.errors()]
+    return JSONResponse(status_code=422, content={"detail": details})
 
 
 def require_token(x_admin_token: str | None = Header(default=None)) -> None:
@@ -145,3 +168,55 @@ def profile_restore(request: ProfileRestoreRequest):
     result = run_restore(resolved)
     return {**result, "source_profile_id": request.source_profile_id,
             "destination_profile_id": request.destination_profile_id}
+
+
+def ssh_operation(action):
+    try:
+        return action()
+    except (OSError, ValueError, paramiko.SSHException, RemoteError, WorkflowError) as exc:
+        raise fail_safely(exc) from exc
+
+
+@app.get("/api/ssh/credentials", dependencies=[Depends(require_token)])
+def ssh_credentials():
+    return ssh_operation(lambda: {"items": ssh_setup.list_credentials()})
+
+
+@app.post("/api/ssh/credentials", dependencies=[Depends(require_token)], status_code=201)
+def generate_ssh_key(request: CredentialCreate):
+    return ssh_operation(lambda: ssh_setup.create_credential(request.name))
+
+
+@app.post("/api/ssh/scan", dependencies=[Depends(require_token)])
+def scan_ssh_host(request: SSHServer):
+    return ssh_operation(lambda: ssh_setup.scan_host(request))
+
+
+@app.post("/api/ssh/trust", dependencies=[Depends(require_token)])
+def trust_ssh_host(request: HostTrustRequest):
+    return ssh_operation(lambda: ssh_setup.trust_host(request.server, request.fingerprint))
+
+
+@app.post("/api/ssh/authorize", dependencies=[Depends(require_token)])
+def authorize_ssh_key(request: KeyAuthorizeRequest):
+    return ssh_operation(lambda: ssh_setup.authorize_key(request.server, request.password.get_secret_value()))
+
+
+@app.post("/api/ssh/test", dependencies=[Depends(require_token)])
+def test_ssh_access(request: SSHServer):
+    def check():
+        with connect_source(request) as remote:
+            with remote.sftp() as sftp:
+                home = sftp.normalize(".")
+        return {"ok": True, "message": "SSH key login and SFTP verified", "home": home}
+    return ssh_operation(check)
+
+
+@app.post("/api/ssh/directories", dependencies=[Depends(require_token)])
+def browse_ssh_directory(request: BrowseDirectoryRequest):
+    return ssh_operation(lambda: browse_directory(request))
+
+
+@app.post("/api/ssh/databases", dependencies=[Depends(require_token)])
+def discover_ssh_databases(request: DiscoverDatabasesRequest):
+    return ssh_operation(lambda: discover_databases(request))

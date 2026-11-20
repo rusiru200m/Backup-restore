@@ -19,10 +19,11 @@
     <div class="sectiontitle"><span class="step">01</span><h2>Admin access</h2></div>
     <label>App token (from your local <code>.env</code>)<input id="token" type="password" placeholder="Paste APP_TOKEN" autocomplete="off" spellcheck="false"></label>
     <button id="loadProfiles" class="secondary">Connect &amp; load saved servers</button>
-    <p class="helper">Profiles are saved on the controller. The token stays in this page's memory.</p>
+    <p class="helper">Saved server details stay on the controller between runs. Enter your token and connect each time to load them. The token stays in this page's memory; this browser remembers only your selected profile IDs.</p>
   </section>
   <section class="panel">
     <div class="sectiontitle"><span class="step">02</span><h2>Server profiles</h2></div>
+    <p id="savedProfilesStatus" class="banner" role="status">Saved servers have not been loaded. Enter your app token above and choose Connect &amp; load saved servers to reuse their details.</p>
     <label>Edit a saved profile<select id="profileEditor"><option value="">New server profile</option></select></label>
     <form id="profileForm">
       <label>Profile name<input id="profileName" maxlength="120" placeholder="e.g. Production backups or Staging app DB" required></label>
@@ -31,22 +32,63 @@
         <label>SSH port<input id="profilePort" value="22" type="number" min="1" max="65535" required></label>
         <label>SSH username<input id="profileUser" value="root" required></label>
       </div>
-      <label>SSH private key path on controller<input id="profileKey" placeholder="e.g. ~/.ssh/production_ed25519"></label>
-      <div class="inputgrid">
-        <label>Known hosts file (optional)<input id="profileKnownHosts" placeholder="Default: ~/.ssh/known_hosts"></label>
-        <label>Passphrase environment variable (optional)<input id="profilePassphraseEnv" placeholder="e.g. PRODUCTION_SSH_PASSPHRASE"></label>
+      <div class="banner">
+        <h3>Set up SSH access here</h3>
+        <label>SSH key<select id="managedCredential"><option value="">Generate a key or use advanced settings below</option></select></label>
+        <div class="actionline"><button id="generateKey" type="button">Generate SSH key</button></div>
+        <p class="helper">The app generates and encrypts a private key on the controller. No key path, key passphrase, or environment variable is needed for generated keys. Keys are named using the profile name above.</p>
+        <details id="publicKeyDetails" hidden><summary>Public key for VPS console setup</summary>
+          <pre id="managedPublicKey"></pre>
+          <p class="helper">If SSH password login is disabled, add this public key as a new line in the selected account's ~/.ssh/authorized_keys through your VPS console or existing SSH client. Keep existing keys. The app's private key is never displayed.</p>
+        </details>
+        <h3>1. Verify the server identity</h3>
+        <button id="scanHost" type="button" class="secondary">Read server fingerprint</button>
+        <p id="hostFingerprint" class="helper">Enter the VPS host and port above, then read its SSH fingerprint. Reading alone does not establish trust.</p>
+        <label>Verified SHA256 fingerprint<input id="verifiedFingerprint" placeholder="SHA256:..." autocomplete="off" spellcheck="false"></label>
+        <p class="helper">Compare the fingerprint with your VPS provider console or an existing trusted SSH connection. Paste the verified value here; the app will check it again and save the server identity automatically.</p>
+        <button id="trustHost" type="button" class="secondary">Verify &amp; trust server</button>
+        <h3>2. Authorize the generated key</h3>
+        <label>Current VPS SSH password (used once)<input id="bootstrapPassword" type="password" autocomplete="off" placeholder="Current password for the SSH username above"></label>
+        <p class="helper">The password is used only to add the public key to this VPS account. It is not saved. This requires SSH password login; otherwise use the public-key console setup above.</p>
+        <div class="actionline">
+          <button id="authorizeKey" type="button" class="secondary">Install public key using password</button>
+          <button id="testSsh" type="button" class="secondary">Test SSH key access</button>
+        </div>
       </div>
-      <p class="helper">Enter file paths, never private key contents. A blank key path uses the source/destination defaults from .env. For encrypted keys, enter the name of an environment variable containing the passphrase. Verify each host's SSH fingerprint and add it to the controller's known_hosts before connecting.</p>
+      <details id="advancedSsh">
+        <summary>Use an existing SSH key (advanced)</summary>
+        <label>SSH private key path on controller<input id="profileKey" placeholder="e.g. ~/.ssh/production_ed25519"></label>
+        <div class="inputgrid">
+          <label>Known hosts file (optional)<input id="profileKnownHosts" placeholder="Default: ~/.ssh/known_hosts"></label>
+          <label>Passphrase environment variable (optional)<input id="profilePassphraseEnv" placeholder="e.g. PRODUCTION_SSH_PASSPHRASE"></label>
+        </div>
+        <p class="helper">These settings apply when no generated key is selected. Blank paths use .env defaults. Existing-key profiles use their own known_hosts file; the setup buttons above save trust for generated-key profiles.</p>
+      </details>
       <label class="check"><input id="profileStorage" type="checkbox" checked> <span>This server stores backup archives</span></label>
-      <div id="storageFields"><label>Backup folder (absolute Linux path)<input id="profileBackupDir" placeholder="/srv/backups/postgresql/daily"></label></div>
+      <div id="storageFields">
+        <label for="profileBackupDir">Backup folder on VPS</label>
+        <div class="folder-input"><input id="profileBackupDir" placeholder="Select a folder on the server"><button id="browseBackupDir" type="button" class="secondary">Browse VPS folders</button></div>
+        <p class="helper">After setting up SSH access, browse this VPS and select the folder containing your .dump backups.</p>
+      </div>
       <label class="check"><input id="profileTarget" type="checkbox"> <span>This server has a restore destination database</span></label>
       <div id="targetFields" hidden>
-        <div class="inputgrid three">
-          <label>Docker container<input id="profileContainer" placeholder="postgres"></label>
-          <label>Existing database<input id="profileDatabase" placeholder="app_db"></label>
-          <label>PostgreSQL role<input id="profileDbUser" placeholder="app_user"></label>
-        </div>
-        <label>Safety backup folder on destination<input id="profileSafetyDir" value="/var/backups/backup-restore-starter"></label>
+        <div class="actionline"><button id="discoverDatabases" type="button" class="secondary">Find databases on this VPS</button></div>
+        <label>Choose the destination database<select id="discoveredDatabase"><option value="">Find databases first</option></select></label>
+        <p id="databaseDiscoverySummary" class="helper" role="status" aria-live="polite">Set up SSH access, then find and select a PostgreSQL database on this VPS.</p>
+        <ul id="databaseDiscoveryWarnings" class="helper" aria-label="Database discovery notices"></ul>
+        <p class="helper">Lists databases in running Docker containers that the detected PostgreSQL role can access. Selecting one fills the connection details automatically.</p>
+        <details id="manualDatabaseDetails">
+          <summary>Connection details / manual setup (advanced)</summary>
+          <div class="inputgrid three">
+            <label>Docker container<input id="profileContainer" placeholder="postgres"></label>
+            <label>Existing database<input id="profileDatabase" placeholder="app_db"></label>
+            <label>PostgreSQL role<input id="profileDbUser" placeholder="app_user"></label>
+          </div>
+          <p class="helper">If discovery cannot authenticate, enter a known PostgreSQL role and database here and retry. The role still needs permission to dump and restore. PostgreSQL credentials remain configured inside the container.</p>
+        </details>
+        <label for="profileSafetyDir">Safety backup folder on destination</label>
+        <div class="folder-input"><input id="profileSafetyDir" value="/var/backups/backup-restore-starter"><button id="browseSafetyDir" type="button" class="secondary">Browse VPS folders</button></div>
+        <p class="helper">Select an existing folder or enter a new folder path for the safety backup.</p>
       </div>
       <p class="helper">A profile can have either role or both. Create additional named profiles for different folders or databases on the same VPS. PostgreSQL must already run inside Docker; database credentials stay configured inside that container.</p>
       <div class="actionline">
@@ -54,6 +96,7 @@
         <button id="newProfile" type="button" class="secondary">New profile</button>
         <button id="deleteProfile" type="button" class="danger" disabled>Delete profile</button>
       </div>
+      <p class="helper">Save each server profile once. Its connection details, SSH key selection, and folders survive app restarts. On your next run, enter your app token and connect, then choose the saved profile instead of entering the details again.</p>
     </form>
   </section>
   <section class="panel">
@@ -86,5 +129,22 @@
   </section>
   <footer>Keep this controller local or access it through an SSH tunnel. Validate restores before resuming application writes.</footer>
 </main>
+<dialog id="folderDialog" class="panel folder-dialog" aria-labelledby="folderTitle">
+  <div class="sectiontitle"><h2 id="folderTitle">Choose a VPS folder</h2></div>
+  <p id="folderServer" class="helper"></p>
+  <div class="actionline">
+    <button id="folderRoot" type="button" class="secondary">Server root /</button>
+    <button id="folderHome" type="button" class="secondary">Home folder</button>
+    <button id="folderUp" type="button" class="secondary">Up one level</button>
+  </div>
+  <nav id="folderBreadcrumbs" aria-label="Current server folder"></nav>
+  <label for="folderFilter">Find in this folder</label><input id="folderFilter" type="search" placeholder="Filter folder and backup names">
+  <p id="folderMessage" class="helper" role="status" aria-live="polite"></p>
+  <ul id="folderList" aria-label="Server folders and backup files"></ul>
+  <div class="actionline folder-actions">
+    <button id="folderSelect" type="button">Select this folder</button>
+    <button id="folderCancel" type="button" class="secondary">Cancel</button>
+  </div>
+</dialog>
 </body>
 </html>

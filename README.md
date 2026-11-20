@@ -6,10 +6,10 @@ The supported restore target is an **existing PostgreSQL database inside a runni
 
 ## Process
 
-1. Configure the controller's admin token and SSH access, then start the app.
+1. Configure the controller's admin token, then start the app.
 2. Enter the token and click **Connect & load saved servers**.
-3. Create a **backup storage** profile: name, host, SSH port, SSH user, controller SSH key path, and remote backup folder.
-4. Create a **destination** profile: name, host, SSH settings, Docker container, existing database, PostgreSQL role, and safety backup folder on that VPS.
+3. Create a **backup storage** profile: name, host, SSH port, SSH user, and remote backup folder. Use **Generate SSH key** and the built-in SSH setup steps below.
+4. Create a **destination** profile: enter its name, host and SSH settings, tick the destination checkbox, and click **Find databases on this VPS**. Choose the destination database from the dropdown; the container, database and role are filled automatically. Configure its safety backup folder and save the profile.
 5. Repeat for all your VPS servers. A profile can have both roles. Use separate profiles for different databases or folders on the same server.
 6. Select a backup storage profile, click **Load backups**, and choose a `.dump` archive.
 7. Select a destination profile and click **Test destination connection**.
@@ -61,7 +61,31 @@ Open **http://127.0.0.1:8000**. Keep one app worker. For a remote controller, ke
 
 ## SSH setup for each VPS
 
-The UI saves connection configuration; it does not install SSH keys or automatically trust unknown hosts.
+### Built-in setup (recommended)
+
+You can generate SSH credentials and install public keys from this dashboard without finding key paths or creating passphrase environment variables.
+
+1. Enter the profile name, VPS host/IP, SSH port, and username.
+2. Click **Generate SSH key**. The app creates an Ed25519 key, encrypts its private half on the controller, and selects it. Existing generated keys are available in the key dropdown.
+3. Click **Read server fingerprint**. Compare the displayed SHA256 fingerprint with the identity shown in your provider's VPS console or existing trusted SSH client. Paste the verified fingerprint and click **Verify & trust server**. The app checks a fresh handshake and maintains its own known_hosts file. A scan alone never trusts a host, and an existing different identity is rejected.
+4. Enter the account's **current VPS SSH password** and click **Install public key using password**. The app uses that password once over host-verified SSH to append the public key to that account's `~/.ssh/authorized_keys`, preserving existing entries. It never saves this password. Repeat installation of the exact same public key is idempotent.
+5. Click **Test SSH key access**, configure the storage/destination details, and **Save profile**. Future operations use the generated key and saved server identity automatically.
+
+For backup and safety-backup folder fields, click **Browse VPS folders** after SSH setup. The picker browses the VPS entered in the current profile, including unsaved profiles. Open folders with a click, use **Server root /**, **Home folder**, **Up one level**, or the folder breadcrumbs to navigate, then click **Select this folder**. The selected remote path fills the field; click **Save profile** to keep it. `.dump` files are shown as a preview; archive selection still happens under **Backup storage & archive**. Browsing only reads directory metadata and does not upload files or modify the VPS. The account needs permission to read each opened folder. Symbolic links are omitted; a maximum of 500 sorted folders/archive entries is shown with a notice if more exist. A new safety folder can still be entered manually and will be created during the restore workflow.
+
+If SSH password login is disabled, open **Public key for VPS console setup** and append the displayed public key through your existing VPS console/SSH session. Then return to test access and save the profile. The app does not enable password login or change SSH daemon configuration. It cannot obtain initial access without an existing authorized login or console access. A host address, username, port and independently verified server identity are still required.
+
+### Discover destination databases
+
+After SSH setup, tick **This server has a restore destination database** and click **Find databases on this VPS**. The app checks running Docker containers for `pg_restore`, reads only the non-secret `POSTGRES_USER` and `POSTGRES_DB` startup hints, and queries PostgreSQL's database catalog using local container authentication. It never reads or returns `POSTGRES_PASSWORD` or the full Docker environment, changes database permissions, creates databases, or runs a restore during discovery.
+
+The dropdown lists each container/database pair with the actual PostgreSQL login role used for discovery. It excludes templates, databases not accepting connections, and databases for which that role lacks CONNECT privilege. Names unsupported by the current restore validator are skipped with a notice. Select one entry to fill connection settings automatically; save the profile and test the destination before restoring. Discovery does not prove that the login has sufficient dump/drop/create privileges or that every listed database will accept a later connection.
+
+Discovery uses the current, possibly unsaved VPS settings and works with generated keys or existing-key profiles. Changing SSH settings clears old results and connection fields. Saved profiles display their saved destination until you refresh discovery. If a container cannot authenticate or lacks tools, notices explain the limitation while accessible containers still appear. For a custom login, expand **Connection details / manual setup (advanced)**, enter a known role/database and retry, or complete the connection fields manually. Existing credentials must work inside the container. Host-installed PostgreSQL, stopped containers and external database services are outside this Docker restore workflow.
+
+### Existing SSH keys (advanced)
+
+Select the blank key option and expand **Use an existing SSH key (advanced)**. These profiles retain the file-path/environment-variable workflow. Their known_hosts file is separate from the generated-key setup's file.
 
 1. Create or choose a private SSH key on the controller. Install only its public key in the VPS account's `~/.ssh/authorized_keys` through your trusted console or existing SSH client.
 2. Verify the VPS host-key fingerprint through a trusted console, then connect from the controller with the same host and port you will enter in the profile. Accept the key only after comparing fingerprints. Nonstandard ports use `[host]:port` known_hosts entries.
@@ -86,7 +110,18 @@ The PostgreSQL role must be able to dump and replace the target objects. Configu
 
 ## Saved settings
 
-- Profiles are stored in `state/profiles.sqlite3`, configurable with `PROFILE_DB_PATH`. Back up this database to preserve the fleet configuration.
+### Reuse servers after restarting
+
+Configure a server once and click **Save profile** after choosing its backup folder or destination database. Testing SSH access, generating a key, browsing a folder, and discovering a database do not save the server profile by themselves.
+
+On later runs, enter the same app token and click **Connect & load saved servers** (or press Enter in the token field). The editor opens your last selected saved profile, or the first saved profile if no previous selection is available. Previously selected backup storage and destination profiles are restored when they still exist. Use **New profile** only to add another server. Backups must be loaded again, and restore confirmations must be entered each time.
+
+Server settings use the existing local SQLite database; no additional database service is needed. The browser remembers only selected profile IDs. The app token stays in page memory, and the one-time VPS login password is never saved. To change a saved server, select it under **Edit a saved profile**, edit its settings, and click **Save profile** again.
+
+- Profiles are stored in `state/profiles.sqlite3`, configurable with `PROFILE_DB_PATH`. Relative profile and SSH storage paths are resolved from the project folder, so changing the launch directory does not create a different set of saved servers. Absolute paths can point to a permanent location outside the project. The app loads `.env` from the project folder; existing operating-system environment variables take precedence.
+- Keep the profile database and the complete SSH storage directory when restarting or moving the controller. A fresh clone does not include these private files because `state/` is ignored by Git. Back them up together to preserve server settings and generated SSH access.
+- Generated credentials and verified host identities are stored in `state/managed-ssh`, configurable with `SSH_STATE_DIR`. Private keys use authenticated Fernet encryption with an automatically generated controller `master.key`; that file is the local encryption secret. The app restricts the storage directory to the controller account on Windows with `icacls` and uses owner-only directory/file modes on POSIX. The controller account can decrypt its keys; this is local protection, not an external secrets service. Keep the entire directory private and back it up securely together with the profile database. Losing `master.key` makes saved generated keys unusable. Anyone obtaining both it and the credential files can decrypt them.
+- The API returns only generated key names, IDs, public keys and fingerprints. Generated-key profiles save a credential ID, with no manually entered key paths or passphrase variables. Deleting a profile leaves its key available for other profiles and does not revoke it from any VPS.
 - Profiles store names, connection settings, controller key paths, passphrase **variable names**, backup paths, and database/container settings. They do not store private key contents or passphrases.
 - Per-profile key and known_hosts paths override `SOURCE_SSH_KEY_PATH`, `DEST_SSH_KEY_PATH`, and `SSH_KNOWN_HOSTS_PATH`. Blank paths use those environment defaults.
 - A blank passphrase-variable field uses the role's legacy `SOURCE_SSH_KEY_PASSPHRASE` or `DEST_SSH_KEY_PASSPHRASE` default. A named but missing variable causes a connection error.
@@ -133,6 +168,14 @@ All API routes require `X-Admin-Token`:
 | `POST /api/profile-backups` | List archives using `source_profile_id` |
 | `POST /api/profile-preflight` | Test using `destination_profile_id` |
 | `POST /api/profile-restore` | Restore using both IDs, both profile revisions, filename and explicit confirmations |
+| `GET /api/ssh/credentials` | List public metadata of generated keys |
+| `POST /api/ssh/credentials` | Generate and encrypt an Ed25519 key using a supplied name |
+| `POST /api/ssh/scan` | Read the SSH server fingerprint without sending credentials |
+| `POST /api/ssh/trust` | Check the independently verified fingerprint and save the server identity |
+| `POST /api/ssh/authorize` | Install the selected public key using the current account password once |
+| `POST /api/ssh/test` | Test key authentication and SFTP with current form settings |
+| `POST /api/ssh/directories` | Browse a remote directory using current SSH settings; returns folders and .dump filename previews |
+| `POST /api/ssh/databases` | Discover accessible PostgreSQL container/database pairs with detected roles; accepts optional known role/database hints |
 
 Legacy `/api/backups`, `/api/preflight`, and `/api/restore` routes remain available for callers supplying full configuration directly.
 

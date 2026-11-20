@@ -54,3 +54,5 @@ def test_restore_saves_safety_to_selected_folder_before_replacing(monkeypatch, s
         assert "--single-transaction" in commands[replacement]
     # Staging cleanup still runs in either case.
     assert any(args[:2] == ["rm", "-f"] for args in commands)
+    assert ["mkdir", "-p", "-m", "700", "/srv/selected-safety"] in commands
+    assert ["chmod", "700", "/srv/selected-safety"] not in commands

@@ -5,6 +5,7 @@ The controller talks to each VPS separately. VPS-to-VPS SSH is NOT required.
 from __future__ import annotations
 
 import hashlib
+import heapq
 import os
 import posixpath
 import stat
@@ -14,7 +15,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import PreflightRequest, RestoreRequest, SourceSelection
+from .models import BrowseDirectoryRequest, PreflightRequest, RestoreRequest, SourceSelection, absolute_directory
 from .remote import RemoteError, SSHRemote, docker_args
 
 
@@ -30,6 +31,10 @@ def required_setting(name: str, default: str | None = None) -> str:
 
 
 def connect_server(server, role: str):
+    if server.credential_id:
+        from . import ssh_setup
+        return SSHRemote(server, None, ssh_setup.known_hosts_path(),
+                         pkey=ssh_setup.load_private_key(server.credential_id))
     passphrase_name = server.passphrase_env or f"{role}_SSH_KEY_PASSPHRASE"
     if server.passphrase_env and not os.environ.get(passphrase_name):
         raise WorkflowError(f"Missing passphrase environment variable: {passphrase_name}")
@@ -47,6 +52,38 @@ def connect_source(server):
 
 def connect_destination(server):
     return connect_server(server, "DEST")
+
+
+def browse_directory(request: BrowseDirectoryRequest) -> dict:
+    """Read remote folders and archive names through the selected SSH identity."""
+    with connect_server(request.server, request.role) as remote:
+        with remote.sftp() as sftp:
+            sftp.get_channel().settimeout(30)
+            home = absolute_directory(sftp.normalize("."))
+            path = absolute_directory(sftp.normalize(request.path or home))
+            if not stat.S_ISDIR(sftp.stat(path).st_mode or 0):
+                raise WorkflowError("Select a directory, not a file")
+
+            def entries():
+                for entry in sftp.listdir_iter(path, read_aheads=5):
+                    name = entry.filename
+                    if name in (".", "..") or "/" in name or "\x00" in name:
+                        continue
+                    is_directory = stat.S_ISDIR(entry.st_mode or 0)
+                    is_dump = stat.S_ISREG(entry.st_mode or 0) and name.endswith(".dump")
+                    if not is_directory and not is_dump:
+                        continue
+                    child = posixpath.join(path, name)
+                    # A selected path must also be valid when saved to a profile.
+                    if len(child) > 1024:
+                        continue
+                    yield {"name": name, "path": child, "is_directory": is_directory,
+                           "bytes": entry.st_size if is_dump else None}
+
+            # Bound retained metadata even when a remote directory is very large.
+            items = heapq.nsmallest(501, entries(), key=lambda item: (not item["is_directory"], item["name"].casefold(), item["name"]))
+            return {"path": path, "home": home, "parent": posixpath.dirname(path) if path != "/" else None,
+                    "items": items[:500], "truncated": len(items) > 500}
 
 
 def list_backups(request: SourceSelection) -> list[dict]:
@@ -132,8 +169,9 @@ def restore(request: RestoreRequest) -> dict:
             with connect_destination(request.destination) as dest:
                 sftp_dest = dest.sftp()
                 try:
-                    dest.run(["mkdir", "-p", destination_dir])
-                    dest.run(["chmod", "700", destination_dir])
+                    # Set permissions only when creating the selected folder. A user
+                    # may browse to an existing shared folder; do not chmod it.
+                    dest.run(["mkdir", "-p", "-m", "700", destination_dir])
                     # Verify database and Docker access before touching existing data.
                     current_db = dest.run(docker_args(request.container, "psql", "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-U", request.database_user, "-d", request.database, "-c", "SELECT current_database()"))
                     if current_db.strip() != request.database:

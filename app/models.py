@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 from pathlib import PurePosixPath
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 
 HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$")
 USER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,63}$")
@@ -21,9 +21,16 @@ class SSHServer(BaseModel):
     host: str
     port: int = Field(default=22, ge=1, le=65535)
     username: str = "root"
+    credential_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
     key_path: str | None = Field(default=None, max_length=1024)
     known_hosts_path: str | None = Field(default=None, max_length=1024)
     passphrase_env: str | None = Field(default=None, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+    @model_validator(mode="after")
+    def one_credential_mode(self) -> "SSHServer":
+        if self.credential_id and (self.key_path or self.known_hosts_path or self.passphrase_env):
+            raise ValueError("Choose a managed SSH key or advanced file settings, not both")
+        return self
 
     @field_validator("key_path", "known_hosts_path")
     @classmethod
@@ -61,6 +68,59 @@ class SourceSelection(BaseModel):
         if len(value) > 1024:
             raise ValueError("Backup directory path too long")
         return value
+
+
+class CredentialCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+    @field_validator("name")
+    @classmethod
+    def nonblank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Enter a key name")
+        return value.strip()
+
+
+class BrowseDirectoryRequest(BaseModel):
+    server: SSHServer
+    path: str | None = None
+    role: str = Field(default="SOURCE", pattern=r"^(SOURCE|DEST)$")
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str | None) -> str | None:
+        return absolute_directory(value) if value is not None else None
+
+
+class DiscoverDatabasesRequest(BaseModel):
+    server: SSHServer
+    database_user: str | None = None
+    database: str | None = None
+
+    @field_validator("database_user", "database")
+    @classmethod
+    def validate_hint(cls, value: str | None) -> str | None:
+        if value is not None and not NAME_RE.fullmatch(value):
+            raise ValueError("Use letters, numbers, dots, underscores or hyphens for discovery hints")
+        return value
+
+
+class HostTrustRequest(BaseModel):
+    server: SSHServer
+    fingerprint: str = Field(pattern=r"^SHA256:[A-Za-z0-9+/]{43}$")
+
+
+class KeyAuthorizeRequest(BaseModel):
+    server: SSHServer
+    password: SecretStr
+
+    @model_validator(mode="after")
+    def require_managed_key(self) -> "KeyAuthorizeRequest":
+        if not self.server.credential_id:
+            raise ValueError("Select a generated SSH key first")
+        if not self.password.get_secret_value():
+            raise ValueError("Enter the current VPS SSH login password")
+        return self
 
 
 class DestinationSettings(BaseModel):

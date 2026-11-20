@@ -20,22 +20,22 @@ class RemoteError(RuntimeError):
 
 
 class SSHRemote:
-    def __init__(self, server: SSHServer, key_path: str, known_hosts: str, passphrase: str | None = None):
+    def __init__(self, server: SSHServer, key_path: str | None, known_hosts: str, passphrase: str | None = None, pkey=None):
         self.server = server
-        self.key_path = str(Path(key_path).expanduser())
+        self.key_path = str(Path(key_path).expanduser()) if key_path else None
         self.known_hosts = str(Path(known_hosts).expanduser())
         self.passphrase = passphrase
+        self.pkey = pkey
         self.client: paramiko.SSHClient | None = None
 
     def __enter__(self) -> "SSHRemote":
         if paramiko is None:
             raise RemoteError("Paramiko is missing. Run: python -m pip install -r requirements.txt")
-        if not Path(self.key_path).is_file():
+        if self.pkey is None and (not self.key_path or not Path(self.key_path).is_file()):
             raise RemoteError(f"SSH key not found on controller: {self.key_path}")
         if not Path(self.known_hosts).is_file():
             raise RemoteError("Known hosts file missing. Verify the server SSH fingerprint and add it on the controller first.")
         client = paramiko.SSHClient()
-        client.load_system_host_keys()
         client.load_host_keys(self.known_hosts)
         client.set_missing_host_key_policy(paramiko.RejectPolicy())
         try:
@@ -44,6 +44,7 @@ class SSHRemote:
                 port=self.server.port,
                 username=self.server.username,
                 key_filename=self.key_path,
+                pkey=self.pkey,
                 passphrase=self.passphrase,
                 look_for_keys=False,
                 allow_agent=False,
@@ -70,7 +71,7 @@ class SSHRemote:
             raise RemoteError("Not connected")
         return self.client.open_sftp()
 
-    def run(self, args: Sequence[str], timeout: int = 120) -> str:
+    def run(self, args: Sequence[str], timeout: int = 120, require_complete: bool = False) -> str:
         """Execute only an argv list (shell-quoted), with bounded output capture."""
         if not self.client:
             raise RemoteError("Not connected")
@@ -81,15 +82,18 @@ class SSHRemote:
         stdout = bytearray()
         stderr = bytearray()
         max_capture = 32_768
+        truncated = False
         try:
             while True:
                 if channel.recv_ready():
                     data = channel.recv(65536)
                     if data:
+                        truncated = truncated or len(stdout) + len(data) > max_capture
                         stdout.extend(data[: max(0, max_capture - len(stdout))])
                 if channel.recv_stderr_ready():
                     data = channel.recv_stderr(65536)
                     if data:
+                        truncated = truncated or len(stderr) + len(data) > max_capture
                         stderr.extend(data[: max(0, max_capture - len(stderr))])
                 if channel.exit_status_ready() and not channel.recv_ready() and not channel.recv_stderr_ready():
                     break
@@ -102,6 +106,8 @@ class SSHRemote:
         output = (stdout + stderr).decode("utf-8", errors="replace").strip()
         if code != 0:
             raise RemoteError(f"Remote command failed (exit {code}): {cmd}\n{output[-4000:]}")
+        if require_complete and truncated:
+            raise RemoteError("Remote discovery output exceeded the capture limit; refusing an incomplete result")
         return output
 
 

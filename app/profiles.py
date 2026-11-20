@@ -6,14 +6,14 @@ import hashlib
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from pathlib import Path
 
+from .config import state_path
 from .models import ServerProfile
 
 
 @contextmanager
 def database():
-    path = Path(os.environ.get("PROFILE_DB_PATH", "state/profiles.sqlite3")).expanduser()
+    path = state_path("PROFILE_DB_PATH", "state/profiles.sqlite3")
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     # Create the file with restricted permissions before SQLite opens it (POSIX).
     descriptor = os.open(path, os.O_CREAT | os.O_WRONLY, 0o600)
