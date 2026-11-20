@@ -10,11 +10,21 @@
 <body>
 <main class="layout">
   <header class="masthead">
-    <div class="overline">POSTGRESQL · DOCKER · SSH</div>
-    <h1>Backup Restore <span>Fleet</span></h1>
-    <p>Manage your VPS servers, choose where backups are stored, and restore to a selected PostgreSQL database.</p>
-    <div class="banner">Save servers → select backup storage → choose a dump → select and test a destination → pause writes and confirm. Each restore targets one database and first saves a safety backup.</div>
+    <a class="brand" href="#" id="brandHome" aria-label="Backup Restore Fleet home"><span class="brand-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 4 16 4 16 0V5M4 12v7c0 4 16 4 16 0v-7"/></svg></span><span>Backup Restore <strong>Fleet</strong><small>Your servers. One restore workspace.</small></span></a>
+    <span class="local-badge"><span class="status-dot"></span> Local controller</span>
   </header>
+  <nav class="workspace-nav" aria-label="Workspace">
+    <button id="navRestore" type="button" class="nav-button active" aria-current="page" aria-controls="restoreView">Restore database</button>
+    <button id="navServers" type="button" class="nav-button" aria-controls="serversView">Manage servers <span id="serverCount" class="count">0</span></button>
+  </nav>
+  <details id="connectionPanel" class="panel connection-panel" open>
+    <summary><span class="connection-label"><span id="connectionDot" class="status-dot"></span><strong id="connectionTitle">Connect to your controller</strong><span id="connectionSummary" class="helper">Enter your app token to load saved servers.</span></span><span class="connection-action">Access settings</span></summary>
+    <div class="connection-body">
+      <label for="token">App token<input id="token" type="password" placeholder="Paste APP_TOKEN from .env" autocomplete="off" spellcheck="false"></label>
+      <button id="loadProfiles" type="button">Connect &amp; load saved servers</button>
+    </div>
+    <p class="helper">Your token stays in this page's memory. Saved server settings stay on the controller.</p>
+  </details>
   <section id="errorSummary" class="panel error-summary" role="alert" aria-labelledby="errorTitle" tabindex="-1" hidden>
     <h2 id="errorTitle">Operation failed</h2>
     <p id="errorMessage"></p>
@@ -23,25 +33,68 @@
     <p id="errorContext" class="helper"></p>
     <p id="errorReference" class="helper"></p>
   </section>
-  <section class="panel">
-    <div class="sectiontitle"><span class="step">01</span><h2>Admin access</h2></div>
-    <label>App token (from your local <code>.env</code>)<input id="token" type="password" placeholder="Paste APP_TOKEN" autocomplete="off" spellcheck="false"></label>
-    <button id="loadProfiles" class="secondary">Connect &amp; load saved servers</button>
-    <p class="helper">Saved server details stay on the controller between runs. Enter your token and connect each time to load them. The token stays in this page's memory; this browser remembers only your selected profile IDs.</p>
+  <section class="activity-panel" aria-live="polite" aria-label="Operation status">
+    <div id="status" class="status neutral">Ready. Connect to load your saved servers.</div>
+    <details id="activityDetails"><summary>Activity details</summary><pre id="output">No operations have run yet.</pre></details>
   </section>
-  <section class="panel">
-    <div class="sectiontitle"><span class="step">02</span><h2>Server profiles</h2></div>
-    <p id="savedProfilesStatus" class="banner" role="status">Saved servers have not been loaded. Enter your app token above and choose Connect &amp; load saved servers to reuse their details.</p>
-    <label>Edit a saved profile<select id="profileEditor"><option value="">New server profile</option></select></label>
-    <form id="profileForm" novalidate>
+  <section id="restoreView" aria-labelledby="restoreViewTitle">
+    <div class="view-heading"><div><div class="overline">RESTORE WORKSPACE</div><h1 id="restoreViewTitle" tabindex="-1">Restore a database</h1><p>Choose your backup and destination, then review the restore.</p></div><button id="manageServersShortcut" type="button" class="secondary">Manage servers</button></div>
+    <div id="serverEmptyState" class="empty-state"><span class="empty-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 4 16 4 16 0V5M4 12v7c0 4 16 4 16 0v-7"/></svg></span><div><strong id="emptyStateTitle">Your servers are one connection away</strong><p id="emptyStateText">Connect above to use saved servers, or register a new server in Manage servers.</p></div><button id="addFirstServer" type="button" class="secondary">Add a server</button></div>
+    <div class="restore-grid">
+      <section id="sourceCard" class="panel restore-card" aria-labelledby="sourceCardTitle">
+        <div class="card-heading"><span class="card-icon source-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 7V5h7l2 3h9v12H3V7Z"/><path d="M3 8h9"/></svg></span><div><span class="eyebrow">01 &middot; SOURCE</span><h2 id="sourceCardTitle">Backup storage &amp; archive</h2></div></div>
+        <label>Backup storage server<select id="sourceProfile"><option value="">Connect to load saved servers</option></select></label>
+        <p id="sourceSummary" class="connection-summary">Select the server that stores your backups.</p>
+        <div class="archive-label"><label for="backupName">Backup archive</label><button id="loadBackups" type="button" class="text-button">Load backups <span aria-hidden="true">&#8635;</span></button></div>
+        <select id="backupName" aria-describedby="archiveHelp"><option value="">Load backups first</option></select>
+        <p id="archiveHelp" class="helper">Choose from the newest 100 .dump backups.</p>
+      </section>
+      <section id="destinationCard" class="panel restore-card" aria-labelledby="destinationCardTitle">
+        <div class="card-heading"><span class="card-icon destination-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 4 16 4 16 0V5M4 12v7c0 4 16 4 16 0v-7"/></svg></span><div><span class="eyebrow">02 &middot; DESTINATION</span><h2 id="destinationCardTitle">Restore destination</h2></div></div>
+        <label>Destination server / database<select id="destProfile"><option value="">Connect to load saved servers</option></select></label>
+        <p id="destSummary" class="connection-summary">Select the database that will receive the backup.</p>
+        <div class="destination-check"><button id="checkDestination" type="button" class="secondary">Test destination connection</button><span id="destinationHealth" class="health-label">Not tested</span></div>
+        <p class="helper">A safety backup is created on this server before its data is replaced.</p>
+      </section>
+    </div>
+    <section class="panel review-panel" aria-labelledby="reviewTitle">
+      <div class="review-header"><div><span class="eyebrow">03 &middot; REVIEW</span><h2 id="reviewTitle">Ready when you are</h2><p id="restoreSummary">Select a backup archive and destination to continue.</p></div><button id="reviewRestore" type="button" disabled aria-expanded="false" aria-controls="restoreConfirmation">Review restore <span aria-hidden="true">&rarr;</span></button></div>
+      <div id="restoreConfirmation" hidden>
+        <div class="restore-warning"><strong>This will replace existing data.</strong> A safety backup is created first. Stop applications and scheduled jobs that write to the destination before continuing.</div>
+        <div class="confirmation-grid"><div>
+          <label class="check"><input type="checkbox" id="writesPaused"><span>I have paused applications and jobs that write to this database.</span></label>
+          <label class="check"><input type="checkbox" id="agreeReplace"><span>I intend to replace the destination's objects and data with this backup.</span></label>
+        </div><div><label>Type the destination database name<input id="confirmation" autocomplete="off" spellcheck="false"></label><p class="helper">The database itself is not dropped. Extra objects absent from the archive may remain.</p></div></div>
+        <div class="confirmation-actions"><button id="cancelReview" type="button" class="secondary">Back to selection</button><button id="restore" type="button" class="danger">Create safety backup &amp; restore</button></div>
+      </div>
+    </section>
+  </section>
+  <section id="serversView" aria-labelledby="serversViewTitle" hidden>
+    <div class="view-heading"><div><div class="overline">SERVER MANAGEMENT</div><h1 id="serversViewTitle" tabindex="-1">Server profiles</h1><p>Register your servers once. Choose them whenever you need to restore.</p></div><button id="backToRestore" type="button" class="secondary">&larr; Back to restore</button></div>
+    <div class="server-layout">
+      <aside class="panel server-library" aria-label="Saved server profiles">
+        <div class="sectiontitle"><h2>Your servers</h2></div>
+        <p id="savedProfilesStatus" class="helper" role="status">Connect using your app token to load saved server profiles.</p>
+        <label>Choose a saved profile<select id="profileEditor"><option value="">New server profile</option></select></label>
+        <button id="newProfile" type="button" class="full-width">+ Add server profile</button>
+        <div class="library-note"><strong>One setup, ready next time</strong><p>Save a server's SSH access and folders here. The Restore database tab uses these saved profiles.</p><p>Use separate profiles for different databases on the same VPS.</p></div>
+      </aside>
+      <section class="panel server-editor" aria-labelledby="profileEditorTitle">
+        <div class="editor-header"><h2 id="profileEditorTitle">New server profile</h2><p id="profileEditorSubtitle" class="helper">Enter connection details, set up SSH access, and choose this server's role.</p></div>
+        <form id="profileForm" novalidate>
+          <div class="editor-section"><h3>1. Connection details</h3>
+
       <label>Profile name<input id="profileName" maxlength="120" placeholder="e.g. Production backups or Staging app DB" required></label>
       <div class="inputgrid three">
         <label>SSH host / IP<input id="profileHost" placeholder="vps.example.com" required></label>
         <label>SSH port<input id="profilePort" value="22" type="number" min="1" max="65535" required></label>
         <label>SSH username<input id="profileUser" value="root" required></label>
       </div>
-      <div class="banner">
-        <h3>Set up SSH access here</h3>
+      
+          </div>
+          <details id="sshSetupDetails" class="setup-section"><summary><span>2. SSH access</span><span class="helper">Keys, server trust &amp; connection test</span></summary>
+<div class="banner">
+        <p class="helper">Generate a key here or choose a saved key. Existing servers only need this setup once.</p>
         <label>SSH key<select id="managedCredential"><option value="">Generate a key or use advanced settings below</option></select></label>
         <div class="actionline"><button id="generateKey" type="button">Generate SSH key</button></div>
         <p class="helper">The app generates and encrypts a private key on the controller. No key path, key passphrase, or environment variable is needed for generated keys. Keys are named using the profile name above.</p>
@@ -79,7 +132,10 @@
         </div>
         <p class="helper">These settings apply when no generated key is selected. Blank paths use .env defaults. Existing-key profiles use their own known_hosts file; the setup buttons above save trust for generated-key profiles.</p>
       </details>
-      <label class="check"><input id="profileStorage" type="checkbox" checked> <span>This server stores backup archives</span></label>
+      
+          </details>
+          <div class="editor-section"><h3>3. Storage &amp; databases</h3>
+<label class="check"><input id="profileStorage" type="checkbox" checked> <span>This server stores backup archives</span></label>
       <div id="storageFields">
         <label for="profileBackupDir">Backup folder on VPS</label>
         <div class="folder-input"><input id="profileBackupDir" placeholder="Select a folder on the server"><button id="browseBackupDir" type="button" class="secondary">Browse VPS folders</button></div>
@@ -105,44 +161,14 @@
         <div class="folder-input"><input id="profileSafetyDir" value="/var/backups/backup-restore-starter"><button id="browseSafetyDir" type="button" class="secondary">Browse VPS folders</button></div>
         <p class="helper">Select an existing folder or enter a new folder path for the safety backup.</p>
       </div>
-      <p class="helper">A profile can have either role or both. Create additional named profiles for different folders or databases on the same VPS. PostgreSQL must already run inside Docker; database credentials stay configured inside that container.</p>
-      <div class="actionline">
-        <button id="saveProfile" type="submit">Save profile</button>
-        <button id="newProfile" type="button" class="secondary">New profile</button>
-        <button id="deleteProfile" type="button" class="danger" disabled>Delete profile</button>
-      </div>
-      <p class="helper">Save each server profile once. Its connection details, SSH key selection, and folders survive app restarts. On your next run, enter your app token and connect, then choose the saved profile instead of entering the details again.</p>
-    </form>
+      
+          </div>
+          <div class="save-bar"><button id="saveProfile" type="submit">Save profile</button><button id="doneManaging" type="button" class="secondary">Back to restore</button><button id="deleteProfile" type="button" class="danger quiet-danger" disabled>Delete profile</button></div>
+        </form>
+      </section>
+    </div>
   </section>
-  <section class="panel">
-    <div class="sectiontitle"><span class="step">03</span><h2>Backup storage &amp; archive</h2></div>
-    <label>Backup storage server<select id="sourceProfile"><option value="">Load saved servers first</option></select></label>
-    <p id="sourceSummary" class="helper">Select a configured backup storage profile.</p>
-    <div class="actionline"><button id="loadBackups" class="secondary">Load backups</button><span class="helper">Newest 100 regular .dump files</span></div>
-    <label>Select a backup<select id="backupName"><option value="">Load backups first</option></select></label>
-  </section>
-  <section class="panel">
-    <div class="sectiontitle"><span class="step">04</span><h2>Restore destination</h2></div>
-    <label>Destination server / database<select id="destProfile"><option value="">Load saved servers first</option></select></label>
-    <p id="destSummary" class="helper">Select a configured destination profile.</p>
-    <div class="actionline"><button id="checkDestination" class="secondary">Test destination connection</button></div>
-  </section>
-  <section class="panel alert">
-    <div class="sectiontitle"><span class="step">05</span><h2>Confirm destructive restore</h2></div>
-    <p><strong>Replacing backed-up objects destroys their current records.</strong> The app exports a safety backup of the destination database before replacing objects. The database itself is not created or dropped.</p>
-    <p id="restoreSummary">Select a source archive and destination.</p>
-    <label class="check"><input type="checkbox" id="writesPaused"> <span>I have stopped applications and scheduled jobs that write to this database.</span></label>
-    <label class="check"><input type="checkbox" id="agreeReplace"> <span>I intend to replace existing objects and data with the selected backup.</span></label>
-    <label>Type the destination database name exactly<input id="confirmation" autocomplete="off" spellcheck="false"></label>
-    <div class="actionline"><button id="restore" class="danger">Create safety backup &amp; restore</button></div>
-    <p class="helper">Single-transaction restore with --clean --if-exists --no-owner --no-acl --exit-on-error. Extra objects absent from the archive may remain.</p>
-  </section>
-  <section class="panel status-panel" aria-live="polite">
-    <div class="sectiontitle"><span class="step">→</span><h2>Activity &amp; results</h2></div>
-    <div id="status" class="status neutral">Ready. Enter your token and load saved servers.</div>
-    <pre id="output">No operations have run yet.</pre>
-  </section>
-  <footer>Keep this controller local or access it through an SSH tunnel. Validate restores before resuming application writes.</footer>
+  <footer>Backup Restore Fleet <span>&middot;</span> Verify your restored data before resuming application writes.</footer>
 </main>
 <dialog id="folderDialog" class="panel folder-dialog" aria-labelledby="folderTitle">
   <div class="sectiontitle"><h2 id="folderTitle">Choose a VPS folder</h2></div>

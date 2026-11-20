@@ -7,14 +7,16 @@ The supported restore target is an **existing PostgreSQL database inside a runni
 ## Process
 
 1. Configure the controller's admin token, then start the app.
-2. Enter the token and click **Connect & load saved servers**.
-3. Create a **backup storage** profile: name, host, SSH port, SSH user, and remote backup folder. Use **Generate SSH key** and the built-in SSH setup steps below.
+2. Enter the token in **Access settings** and click **Connect & load saved servers**. The access settings collapse after your profiles load.
+3. Open the **Manage servers** tab and create a **backup storage** profile: name, host, SSH port, SSH user, and remote backup folder. Expand **SSH access** to use **Generate SSH key** and the built-in SSH setup steps below.
 4. Create a **destination** profile: enter its name, host and SSH settings, tick the destination checkbox, and click **Find databases on this VPS**. Choose the destination database from the dropdown; the container, database and role are filled automatically. Configure its safety backup folder and save the profile.
 5. Repeat for all your VPS servers. A profile can have both roles. Use separate profiles for different databases or folders on the same server.
-6. Select a backup storage profile, click **Load backups**, and choose a `.dump` archive.
-7. Select a destination profile and click **Test destination connection**.
-8. Pause applications and scheduled jobs that write to the destination. Check both confirmations, type the exact database name, and start the restore.
+6. Return to **Restore database**. In the left **Backup storage & archive** card, select a backup storage profile, click **Load backups**, and choose a `.dump` archive.
+7. In the right **Restore destination** card, select a destination profile and click **Test destination connection**.
+8. Click **Review restore** below the two cards. Pause applications and scheduled jobs that write to the destination, check both confirmations, type the exact database name, and start the restore.
 9. Verify the restored database and application before resuming writes.
+
+The restore workspace keeps registration in the separate **Manage servers** view. Switching views retains your unsaved profile draft and current restore selections. The source and destination cards sit side by side on desktop and stack on smaller screens. Activity details are collapsed until opened. Changing the source, archive or destination clears restore confirmations and closes the review step; the confirmation fields and final replacement action remain required.
 
 Example: one storage VPS can serve backups to staging, testing, and production VPS profiles. Alternatively, give every VPS its own storage and destination profiles. Each operation restores one selected archive into one selected database; there is no bulk destructive restore.
 

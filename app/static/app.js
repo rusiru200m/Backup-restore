@@ -13,6 +13,8 @@ const profileSelectionKey = "backupRestore.profileSelections";
 const profileSelectIds = ["profileEditor", "sourceProfile", "destProfile"];
 let profilesLoaded = false;
 let editorSelectionExplicit = false;
+let currentView = "restore";
+let destinationVerifiedFor = "";
 function readProfileSelections() {
   try {
     const saved = JSON.parse(localStorage.getItem(profileSelectionKey) || "{}");
@@ -77,6 +79,12 @@ function clearErrors() {
 function focusField(id) {
   const control = $(id);
   if (!control) return;
+  if (control.closest("#serversView")) showWorkspace("servers", false);
+  if (control.closest("#restoreView")) showWorkspace("restore", false);
+  if (control.closest("#restoreConfirmation")) {
+    $("restoreConfirmation").hidden = false;
+    $("reviewRestore").setAttribute("aria-expanded", "true");
+  }
   if ($("folderDialog").open && !$("folderDialog").contains(control)) $("folderDialog").close();
   for (let parent = control.parentElement; parent; parent = parent.parentElement) {
     if (parent.tagName === "DETAILS") parent.open = true;
@@ -208,6 +216,7 @@ function busy(on) {
   document.querySelectorAll("input, select, button").forEach(el => { el.disabled = on; });
   if (!on) $("deleteProfile").disabled = !$("profileEditor").value;
   identityControls();
+  updateWorkspace();
 }
 async function request(url, data, method = "POST") {
   const token = $("token").value.trim();
@@ -294,6 +303,9 @@ function resetConfirmations() {
   $("writesPaused").checked = false;
   $("agreeReplace").checked = false;
   $("confirmation").value = "";
+  $("restoreConfirmation").hidden = true;
+  $("reviewRestore").setAttribute("aria-expanded", "false");
+  updateWorkspace();
 }
 function invalidateBackups() {
   backupsFor = "";
@@ -304,9 +316,10 @@ function summaries() {
   const source = selected("sourceProfile");
   const dest = selected("destProfile");
   $("sourceSummary").textContent = source ? `${source.ssh.username}@${source.ssh.host}:${source.ssh.port} · ${source.backup_directory}` : "Select a backup storage profile.";
-  $("destSummary").textContent = dest ? `${dest.ssh.username}@${dest.ssh.host}:${dest.ssh.port} · container ${dest.destination.container} · database ${dest.destination.database} · role ${dest.destination.database_user} · safety folder ${dest.destination.safety_backup_directory || "controller default"}` : "Select a destination profile.";
+  $("destSummary").textContent = dest ? `${dest.ssh.host}:${dest.ssh.port} · ${dest.destination.container} · PostgreSQL role: ${dest.destination.database_user}` : "Select the database that will receive the backup.";
   $("restoreSummary").textContent = source && dest && $("backupName").value ? `${source.name}: ${$("backupName").value} → ${dest.name}: ${dest.destination.database} on ${dest.ssh.host}` : "Select a source archive and destination.";
   $("confirmation").placeholder = dest ? dest.destination.database : "Destination database name";
+  updateWorkspace();
 }
 function roleFields() {
   $("storageFields").hidden = !$("profileStorage").checked;
@@ -371,6 +384,9 @@ async function refreshCredentials(desired = $("managedCredential").value) {
 function editProfile() {
   clearErrors();
   const p = selected("profileEditor");
+  $("profileEditorTitle").textContent = p ? p.name : "New server profile";
+  $("profileEditorSubtitle").textContent = p ? "Update this server's settings, then save your changes." : "Enter connection details, set up SSH access, and choose this server's role.";
+  $("sshSetupDetails").open = false;
   $("profileForm").reset();
   $("managedCredential").value = p?.ssh.credential_id || "";
   if (p) {
@@ -423,6 +439,7 @@ $("loadProfiles").addEventListener("click", () => perform(async () => {
   await refreshCredentials();
   await refreshProfiles();
   setStatus(`Loaded ${profiles.length} saved profile(s)`, "success", profiles.length ? "Your saved server details are loaded. Choose a profile to edit, or select backup storage and a destination below." : "Enter your server details and choose Save profile once. Next time, connect to load them again.");
+  $("connectionPanel").open = false;
 }, "Loading saved servers..."));
 $("token").addEventListener("keydown", event => {
   if (event.key === "Enter") { event.preventDefault(); $("loadProfiles").click(); }
@@ -472,7 +489,11 @@ $("loadBackups").addEventListener("click", () => perform(async () => {
 }, "Reading backup storage over SSH...", () => selectionIssues("sourceProfile", "Select a saved backup storage server first."), () => savedContext("sourceProfile")));
 $("checkDestination").addEventListener("click", () => perform(async () => {
   const p = selected("destProfile");
+  destinationVerifiedFor = "";
+  updateWorkspace();
   const result = await request("/api/profile-preflight", { destination_profile_id: p.id });
+  destinationVerifiedFor = `${p.id}:${p.revision}`;
+  updateWorkspace();
   setStatus(`Destination ${p.name} is reachable`, "success", JSON.stringify(result, null, 2));
 }, "Checking destination SSH, Docker and PostgreSQL...", () => selectionIssues("destProfile", "Select a saved destination database first."), () => savedContext("destProfile")));
 $("restore").addEventListener("click", () => perform(async () => {
@@ -748,3 +769,53 @@ document.querySelectorAll("input,select").forEach(control => {
   control.addEventListener("input", clearEditedError);
   control.addEventListener("change", clearEditedError);
 });
+
+function updateWorkspace() {
+  const source = selected("sourceProfile");
+  const destination = selected("destProfile");
+  const ready = Boolean(source && destination && $("backupName").value && backupsFor === source.id);
+  $("reviewRestore").disabled = running || !ready;
+  $("reviewTitle").textContent = !$("restoreConfirmation").hidden ? "Confirm your restore" : ready ? "Review your selection" : "Choose your backup and destination";
+  const verified = Boolean(destination && destinationVerifiedFor === `${destination.id}:${destination.revision}`);
+  $("destinationHealth").textContent = verified ? "Connection verified" : "Not tested";
+  $("destinationHealth").className = "health-label" + (verified ? " verified" : "");
+  $("serverCount").textContent = profiles.length;
+  $("serverEmptyState").hidden = profilesLoaded && profiles.length > 0;
+  $("emptyStateTitle").textContent = profilesLoaded ? "Add your first server" : "Your servers are one connection away";
+  $("emptyStateText").textContent = profilesLoaded ? "Register your backup storage and destination in Manage servers, then return here." : "Connect above to use saved servers, or register a new server in Manage servers.";
+  $("connectionTitle").textContent = profilesLoaded ? "Saved servers loaded" : "Connect to your controller";
+  $("connectionSummary").textContent = profilesLoaded ? `${profiles.length} profile(s) available. Open to refresh or change your token.` : "Enter your app token to load saved servers.";
+  $("connectionDot").style.backgroundColor = profilesLoaded ? "#459d7c" : "";
+}
+function showWorkspace(view, focus = true) {
+  if (running) return;
+  currentView = view === "servers" ? "servers" : "restore";
+  $("restoreView").hidden = currentView !== "restore";
+  $("serversView").hidden = currentView !== "servers";
+  for (const [id, name] of [["navRestore", "restore"], ["navServers", "servers"]]) {
+    $(id).classList.toggle("active", name === currentView);
+    if (name === currentView) $(id).setAttribute("aria-current", "page");
+    else $(id).removeAttribute("aria-current");
+  }
+  if (focus) {
+    window.scrollTo({ top: 0, behavior: "instant" });
+    $(currentView === "restore" ? "restoreViewTitle" : "serversViewTitle").focus({ preventScroll: true });
+  }
+}
+$("navRestore").addEventListener("click", () => showWorkspace("restore"));
+$("navServers").addEventListener("click", () => showWorkspace("servers"));
+$("manageServersShortcut").addEventListener("click", () => showWorkspace("servers"));
+$("addFirstServer").addEventListener("click", () => showWorkspace("servers"));
+$("backToRestore").addEventListener("click", () => showWorkspace("restore"));
+$("doneManaging").addEventListener("click", () => showWorkspace("restore"));
+$("brandHome").addEventListener("click", event => { event.preventDefault(); showWorkspace("restore"); });
+$("reviewRestore").addEventListener("click", () => {
+  if (running || $("reviewRestore").disabled) return;
+  $("restoreConfirmation").hidden = false;
+  $("reviewRestore").setAttribute("aria-expanded", "true");
+  updateWorkspace();
+  $("writesPaused").focus({ preventScroll: true });
+  $("restoreConfirmation").scrollIntoView({ block: "nearest" });
+});
+$("cancelReview").addEventListener("click", resetConfirmations);
+updateWorkspace();
